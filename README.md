@@ -30,13 +30,13 @@ Parts to buy, with links: [PARTS.md](PARTS.md).
 
 ## Download
 
-One file per system, nothing else to install except the disk driver. Latest version:
+One file, nothing else to install except the disk driver. Latest version:
 
 | | Download | Driver, for playing from the drives | First start |
 |---|---|---|---|
-| Windows | [pc98-floppy-station-windows.exe](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-windows.exe) | [WinFsp](https://winfsp.dev/rel/) | Windows may warn about an unknown publisher: *More info*, then *Run anyway*. |
-| macOS | [Apple silicon](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-macos.zip) or [Intel](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-macos-intel.zip) | [FUSE-T](https://www.fuse-t.org/) | The app isn't signed. Open it once, let macOS refuse, then allow it under *System Settings → Privacy & Security → Open Anyway*. If macOS calls it damaged, run `xattr -dr com.apple.quarantine "PC-98 Floppy Station.app"` in Terminal first. It will ask for access to Documents, where backups go. |
 | Linux | [pc98-floppy-station-linux](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux) | `fuse3` from your distribution | `chmod +x pc98-floppy-station-linux`, then run it. The window opens in your browser. |
+| Windows | not yet | [WinFsp](https://winfsp.dev/rel/) | Built, not yet tried on a real machine. It will be released once it has been. |
+| macOS | not yet | [FUSE-T](https://www.fuse-t.org/) | Built for Apple silicon and Intel, not yet tried on a real Mac. Same. |
 
 Plug the unit in, start the program, and a window opens. The first time, put a disk in
 the **left** drive only and press *Check*, so it learns which drive is which. Then
@@ -44,7 +44,7 @@ the **left** drive only and press *Check*, so it learns which drive is which. Th
 in for a drive: choose it under *Use a backup instead*, and the game plays from a copy of
 that file, with its changes written back to it on Stop. With backups chosen for both drives,
 no driver is needed at all. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
-The Windows and Mac files are built by GitHub and have not been tried on a real machine yet.
+Linux is where it has been developed and tested, on a Steam Deck.
 
 ## The software
 

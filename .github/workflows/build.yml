@@ -91,13 +91,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
+      # Only Linux has been run on a real machine. The Windows and Mac builds stay as
+      # workflow artifacts for testing and join the release once they have been proven.
       - name: Name the files
         run: |
           mkdir release
           cp out/pc98-floppy-station-linux/pc98-floppy-station release/pc98-floppy-station-linux
-          cp out/pc98-floppy-station-windows/pc98-floppy-station.exe release/pc98-floppy-station-windows.exe
-          cp out/pc98-floppy-station-macos/pc98-floppy-station-macos.zip release/pc98-floppy-station-macos.zip
-          cp out/pc98-floppy-station-macos-intel/pc98-floppy-station-macos.zip release/pc98-floppy-station-macos-intel.zip
           ls -la release
       - uses: softprops/action-gh-release@v2
         with:
