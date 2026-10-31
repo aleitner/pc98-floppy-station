@@ -46,9 +46,11 @@ write-protected and the file is read-only, so the game can never write to it.
 - **Load into memory** (`loaded_mode.py`) reads each disk in full into `~/PC98Drives` as an
   ordinary file, then watches the files: a save is written back to the floppy, verified,
   about a second after the game stops writing; a swapped disk is read in and its file
-  replaced. No driver is needed. A write-protected disk's image is kept in the program's
-  cache folder and only spot-checked next time, so it starts in seconds; a writable disk is
-  always read afresh, because stale save data must never go back onto it.
+  replaced. No driver is needed. The first time a write-protected disk is loaded, its image
+  is saved under the disk's own name in `Documents/PC98 Floppies`, the same folder the Back
+  up button uses; next time the disk is found there by its first track, spot-checked against
+  the drive, and starts in seconds. A writable disk is always read afresh, because stale save
+  data must never go back onto it.
 - **Play from disk** runs the bridge below: the files are the drives themselves, every read
   goes to the floppy. It needs the driver from the table above. The files appear in
   `~/PC98Drives` (`P:` on Windows).

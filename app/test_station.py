@@ -50,7 +50,8 @@ def main() -> int:
     open(b, "wb").write(db)
     cfgdir = os.path.join(d, "cfg", "pc98-floppy-station")
     os.makedirs(cfgdir)
-    json.dump({"left": "A", "mountpoint": m, "folder": os.path.join(d, "f")},
+    lib = os.path.join(d, "library")
+    json.dump({"left": "A", "mountpoint": m, "folder": os.path.join(d, "f"), "library": lib},
               open(os.path.join(cfgdir, "settings.json"), "w"))
     env = dict(os.environ, PC98_STATION_IMAGES=f"FD1={a},FD2={b}", XDG_CONFIG_HOME=os.path.join(d, "cfg"))
     log = open(os.path.join(d, "log"), "w+")
@@ -122,6 +123,9 @@ def main() -> int:
         check(s["mode"] == "loaded" and os.path.isfile(lf1) and os.path.isfile(lf2), "plain files exist")
         check(open(lf1, "rb").read() == da and open(lf2, "rb").read() == db, "files hold the disks' bytes")
         check(s["drives"]["FD1"]["protected"] is True and not os.access(lf1, os.W_OK), "protected disk gives a read-only file")
+        kept = [p for p in os.listdir(lib) if p.endswith(".hdm")] if os.path.isdir(lib) else []
+        check(len(kept) == 1 and open(os.path.join(lib, kept[0]), "rb").read() == da, "the protected disk's image is kept in the library")
+        check(not any(open(os.path.join(lib, p), "rb").read() == db for p in kept), "the writable disk is not kept")
         save = b"MEMSAVE!" * 128
         with open(lf2, "r+b", buffering=0) as f:
             f.seek(100 * 1024)

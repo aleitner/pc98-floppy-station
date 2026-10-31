@@ -61,8 +61,9 @@ a Back up button per drive. The two ways:
 - **Load into memory** ([`app/loaded_mode.py`](app/loaded_mode.py)): each disk is read in
   full into an ordinary file, the emulator plays from that, and the program watches the
   file: saves are written back to the floppy, verified, and a swapped disk is read in.
-  No driver. A write-protected disk's image is cached, so later starts are quick; a
-  writable disk is always read afresh.
+  No driver. The first load of a write-protected disk also saves its image to
+  `Documents/PC98 Floppies`, where Back up puts its files, and later starts use that image
+  after a spot check; a writable disk is always read afresh.
 - **Play from disk** ([`app/floppy_bridge.py`](app/floppy_bridge.py)): the files *are* the
   drives; every read goes to the floppy as the game asks. Needs a FUSE driver: libfuse on
   Linux, WinFsp on Windows, FUSE-T or macFUSE on macOS.

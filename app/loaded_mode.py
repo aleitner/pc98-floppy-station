@@ -6,15 +6,16 @@ a save, the changed tracks are written back to the real floppy, verified, after 
 moment. When a disk is swapped, the new one is read in and the file replaced.
 
 A write-protected disk can't have changed since it was last read, so its image is kept
-in a cache and only spot-checked, which makes later starts quick. A writable disk is
-always read in full: stale save data must never be written back.
+in the library folder (the same place the Back up button writes to), found again by its
+first track and spot-checked, which makes later starts quick. A writable disk is always
+read in full: stale save data must never be written back.
 
 The same TrackDisk does the caching, the track-0 write guard, the verified writes and the
 swap bookkeeping as in live mode.
 """
 from __future__ import annotations
 
-import hashlib
+import glob
 import os
 import stat
 import threading
@@ -57,11 +58,49 @@ def label_of(sector: bytes) -> str:
     return text if text.isprintable() and text else ""
 
 
+def safe_name(text: str) -> str:
+    keep = "".join(c if c.isalnum() or c in "-_ " else "_" for c in text).strip()
+    return keep or "disk"
+
+
+def find_image(library: str, first: bytes, size: int, ext: str) -> Optional[str]:
+    """An image in the library whose first track is this one, if any."""
+    for path in sorted(glob.glob(os.path.join(glob.escape(library), "*" + ext))):
+        try:
+            if os.path.getsize(path) != size:
+                continue
+            with open(path, "rb") as f:
+                if f.read(len(first)) == first:
+                    return path
+        except OSError:
+            continue
+    return None
+
+
+def store_image(library: str, image: bytes, label: str, ext: str) -> str:
+    """Save an image under the disk's own name, never over a different disk's file."""
+    os.makedirs(library, exist_ok=True)
+    stem = safe_name(label) if label else time.strftime("disk %Y-%m-%d %H%M")
+    path = os.path.join(library, stem + ext)
+    n = 2
+    while os.path.exists(path):
+        with open(path, "rb") as f:
+            if f.read() == image:
+                return path                   # already there
+        path = os.path.join(library, f"{stem} ({n}){ext}")
+        n += 1
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(image)
+    os.replace(tmp, path)
+    return path
+
+
 class LoadedDrives:
-    def __init__(self, folder: str, fmt: str, cache_dir: str, log: Callable[[str], None]) -> None:
+    def __init__(self, folder: str, fmt: str, library: str, log: Callable[[str], None]) -> None:
         self.folder = folder
         self.ext = EXT[fmt]
-        self.cache_dir = cache_dir
+        self.library = library
         self.log = log
         self.slots: Dict[str, Loaded] = {}
         self.oplock = threading.RLock()          # one drive operation at a time: one board
@@ -175,7 +214,7 @@ class LoadedDrives:
             for idx in range(1, cyls * heads):
                 disk._cache[idx] = bytearray(cached[idx * tb:(idx + 1) * tb])
             s.track = s.total
-            self.log(f"{s.name}: known disk, loaded from the cache")
+            self.log(f"{s.name}: known disk, loaded from its image in the library")
             return cached
         chunks: List[bytes] = [first]
         for idx in range(1, cyls * heads):
@@ -190,40 +229,31 @@ class LoadedDrives:
             s.track = idx + 1
         image = b"".join(chunks)
         if s.protected:
-            self._store_cache(s, first, image)
+            try:
+                path = store_image(self.library, image, label_of(first), self.ext)
+                self.log(f"{s.name}: image saved as {os.path.basename(path)}")
+            except OSError as e:
+                self.log(f"{s.name}: couldn't save the image: {e}")
         return image
 
-    def _cache_path(self, first: bytes) -> str:
-        return os.path.join(self.cache_dir, hashlib.sha1(first).hexdigest() + self.ext)
-
     def _cached_image(self, s: Loaded, first: bytes) -> Optional[bytes]:
-        path = self._cache_path(first)
+        be = s.backend
+        path = find_image(self.library, first, be.cyls * be.heads * be.track_bytes, self.ext)
+        if path is None:
+            return None
         try:
             with open(path, "rb") as f:
                 image = f.read()
         except OSError:
-            return None
-        be = s.backend
-        if len(image) != be.cyls * be.heads * be.track_bytes:
             return None
         checks = [(c, h) for c in (*SPOT_CHECK, be.cyls - 1) for h in range(be.heads) if 0 < c < be.cyls]
         for cyl, head in checks:
             idx = cyl * be.heads + head
             data = be.read_track(cyl, head)
             if data is None or data != image[idx * be.track_bytes:(idx + 1) * be.track_bytes]:
-                self.log(f"{s.name}: cached image doesn't match track {cyl}.{head}, reading the disk")
+                self.log(f"{s.name}: the library image doesn't match track {cyl}.{head}, reading the disk")
                 return None
         return image
-
-    def _store_cache(self, s: Loaded, first: bytes, image: bytes) -> None:
-        try:
-            os.makedirs(self.cache_dir, exist_ok=True)
-            tmp = self._cache_path(first) + ".part"
-            with open(tmp, "wb") as f:
-                f.write(image)
-            os.replace(tmp, self._cache_path(first))
-        except OSError as e:
-            self.log(f"{s.name}: couldn't keep a copy in the cache: {e}")
 
     # -- the file the emulator sees -------------------------------------------------
     def _write_file(self, s: Loaded, image: bytes) -> None:

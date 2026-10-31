@@ -33,7 +33,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from bridge_paths import EXT, GEOMETRY, cmd_path, default_mountpoint
-from loaded_mode import LoadedDrives
+from loaded_mode import LoadedDrives, store_image
 
 SYSTEM = platform.system()
 PORT = 9801
@@ -66,6 +66,7 @@ class Config:
     format: str = "pc98.2hd"
     mountpoint: str = field(default_factory=default_mountpoint)      # live mode: the driver's mount
     folder: str = field(default_factory=lambda: os.path.expanduser("~/PC98Drives"))  # loaded mode: a plain folder
+    library: str = ""              # where disk images are kept; "" = Documents/PC98 Floppies
     offsets: Dict[str, int] = field(default_factory=dict)
     emulator_command: str = ""     # custom launch command with {play} {fd1} {fd2}; "" = find RetroArch
 
@@ -302,11 +303,6 @@ def label_from(sector: bytes) -> str:
     return text if text.isprintable() and text else ""
 
 
-def safe_name(text: str) -> str:
-    keep = "".join(c if c.isalnum() or c in "-_ " else "_" for c in text).strip()
-    return keep or "disk"
-
-
 def disk_label(path: str) -> str:
     """What the disk calls itself: the maker field of its boot sector, where PC-98 games
     usually put their name and disk number (e.g. "Xak2-No1"). Read through the bridge."""
@@ -351,6 +347,10 @@ class Station:
         return self.bridge.ready
 
     @property
+    def library(self) -> str:
+        return self.cfg.library or backup_dir()
+
+    @property
     def where(self) -> str:
         """The folder the emulator's files are in for the mode in use."""
         return self.cfg.folder if self.mode == "loaded" else self.cfg.mountpoint
@@ -385,7 +385,7 @@ class Station:
             return f"can't open the drives: {e}"
         self.probe = {}
         self.mode = "loaded"
-        self.loaded = LoadedDrives(self.cfg.folder, self.cfg.format, os.path.join(config_dir(), "cache"), self.note)
+        self.loaded = LoadedDrives(self.cfg.folder, self.cfg.format, self.library, self.note)
         self.loaded.start(backends, closer)
         return "reading the disks"
 
@@ -438,16 +438,7 @@ class Station:
                                 label = label_from(data)
                             chunks.append(data)
                             job["track"] = cyl * be.heads + head + 1
-                    folder = backup_dir()
-                    os.makedirs(folder, exist_ok=True)
-                    stem = safe_name(label) if label else time.strftime("disk %Y-%m-%d %H%M")
-                    path = os.path.join(folder, stem + ext)
-                    n = 2
-                    while os.path.exists(path):
-                        path = os.path.join(folder, f"{stem} ({n}){ext}")
-                        n += 1
-                    with open(path, "wb") as f:
-                        f.write(b"".join(chunks))
+                    path = store_image(self.library, b"".join(chunks), label, ext)
                     job["file"] = path
                     bad = len(job["bad"])
                     self.note(f"{name}: saved {os.path.basename(path)}" + (f", {bad} track(s) unreadable" if bad else ""))
@@ -511,7 +502,7 @@ class Station:
             "emulator": {"found": emu is not None, "custom": bool(cfg.emulator_command.strip()),
                          "name": "RetroArch, Neko Project II kai core" if emu else ""},
             "log": sorted(list(self.bridge.log) + list(self.events))[-60:], "message": self.message,
-            "job": self.job, "backup_dir": backup_dir(),
+            "job": self.job, "backup_dir": self.library,
             "config": asdict(cfg),
         }
 

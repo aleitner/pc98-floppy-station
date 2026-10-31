@@ -292,7 +292,7 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
   <h3>The bridge</h3>
   <p>The emulator gets two disk-image files, <code>FD1.hdm</code> and <code>FD2.hdm</code>, that it opens like any other image, and there are two ways to make them real drives:</p>
   <ul>
-    <li><strong>Load into memory:</strong> each disk is read in full first, about two minutes a disk, then played from memory. Saves are written back to the floppy, verified, and a swapped disk is read in. Nothing to install. A write-protected disk is remembered, so it starts quickly next time; a save disk is always read afresh.</li>
+    <li><strong>Load into memory:</strong> each disk is read in full first, about two minutes a disk, then played from memory. Saves are written back to the floppy, verified, and a swapped disk is read in. Nothing to install. The first load of a write-protected disk also saves its image in <code>Documents/PC98 Floppies</code>, the backup folder; next time it's found there, spot-checked and started in seconds. A save disk is always read afresh.</li>
     <li><strong>Play from disk:</strong> the files <em>are</em> the drives; every read goes to the floppy as the game asks, and a swap is seen through the drive's own disk-change line. This needs a disk driver: <strong>libfuse</strong> on Linux, usually already there; <strong>WinFsp</strong> on Windows; <strong>FUSE-T</strong> on macOS. The window says if it's missing.</li>
   </ul>
   <h3>Download</h3>
