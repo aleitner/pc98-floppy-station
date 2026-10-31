@@ -30,9 +30,9 @@ Parts to buy, with links: [PARTS.md](PARTS.md).
 
 ## Download
 
-One file, nothing else to install except the disk driver. Latest version:
+One file, plus the disk driver for your system. Latest version:
 
-| | Download | Driver, for playing from the drives | First start |
+| | Download | Driver | First start |
 |---|---|---|---|
 | Linux | [pc98-floppy-station-linux.AppImage](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage) | `fuse3` from your distribution | Make it executable (right-click → Properties → Permissions, or `chmod +x`), then double-click. It appears in your menu with its icon after the first start. The window opens in your browser. |
 | Windows | not yet | [WinFsp](https://winfsp.dev/rel/) | Built, not yet tried on a real machine. It will be released once it has been. |
@@ -42,8 +42,7 @@ Plug the unit in, start the program, and a window opens. The first time, put a d
 the **left** drive only and press *Check*, so it learns which drive is which. Then
 *Start*, then *Play*. Each drive has a *Back up this disk* button, and a backup can stand
 in for a drive: choose it under *Use a backup instead*, and the game plays from that file,
-so saves land in it. With backups chosen for both drives the game plays from copies that are
-written back on Stop, and no driver is needed at all. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
+so saves land in it. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
 Linux is where it has been developed and tested, on a Steam Deck.
 
 ## The software

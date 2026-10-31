@@ -20,10 +20,9 @@ A filesystem layer and Python with a few packages.
 | Windows | install [WinFsp](https://winfsp.dev/rel/) | Microsoft C++ Build Tools |
 | macOS | install [FUSE-T](https://www.fuse-t.org/), or macFUSE (Apple Silicon needs a reduced-security boot for macFUSE) | `xcode-select --install` |
 
-    python3 -m pip install mfusepy pywebview pystray git+https://github.com/keirf/greaseweazle@latest
+    python3 -m pip install mfusepy git+https://github.com/keirf/greaseweazle@latest
 
-`pywebview` gives the program its own window and `pystray` a tray icon; both are optional,
-without them the page opens in a browser. The Greaseweazle package contains C code, so that step needs a compiler unless a build for
+The Greaseweazle package contains C code, so that step needs a compiler unless a build for
 your Python version is already available. SteamOS has no compiler: build wheels in a
 `python:3.14` podman container into `~/gw-wheel/py314` and install from there. Redo this
 whenever a system update changes the Python version.
@@ -32,10 +31,11 @@ whenever a system update changes the Python version.
 
     python3 station.py
 
-A window opens: the program's own where the system allows it, otherwise a bare browser window,
-otherwise a browser tab at `http://127.0.0.1:9801` (another port if that one is busy; the
-program prints the address). It shows whether the Greaseweazle and the filesystem layer
-were found, both drives with their disk state, and a Start button.
+A window opens: a bare browser window where a Chromium-family browser is installed, otherwise
+a browser tab, at `http://127.0.0.1:9801`. It shows whether the Greaseweazle and the filesystem
+layer were found, both drives with their disk state, and a Start button. If the filesystem
+layer is missing, the window says so; install it and start the program again. Starting the
+program a second time only brings the window back.
 
 **First run:** put a disk in the LEFT drive only, close its lever and press Check. The unit
 that holds a disk is remembered as the left drive; it becomes `FD1`. If you ever move the
@@ -49,11 +49,8 @@ as write-protected and the file is read-only, so the game can never write to it.
 into `Documents/PC98 Floppies` under the disk's own name (unreadable tracks are counted,
 not retried over and over). *Use a backup instead* lists that folder: pick an image and the
 drive plays from the file rather than the floppy; saves then land in the file. *Use the
-drive* switches back. When both drives play from images, no driver is involved: each image
-is copied into `~/PC98Images` (`C:\ProgramData\PC98Images` on Windows, a path without
-spaces, which the emulator's command file needs), the game plays from the copy, and on Stop
-the changes are copied back into the image. If the program dies before Stop, the next Start
-finds the changed copy and writes it back first.
+drive* switches back. An image goes through the same bridge as a drive, so the emulator
+always sees the same two files, and a read-only image shows as a write-protected disk.
 
 A backup whose read had unreadable tracks is named for it, e.g. `Xak2-No2 (3 unreadable
 tracks).hdm`, with those tracks filled with zeros, so it is never mistaken for a clean one.
@@ -68,13 +65,13 @@ game. Wait a couple of seconds after a save before opening a lever: changes reac
 about a second after the game stops writing. If a disk comes out first, those changes are
 dropped, never written to the next disk, and the log says so.
 
-Stop writes anything unsaved first. Closing the program's own window stops the bridge the same
-way; with a tray icon, closing the window only hides it and *Quit* ends the program. A closed
-browser tab or window ends the program a few seconds later; the drives are stopped first, with
-anything pending written.
+Stop writes anything unsaved first. Closing the window ends the program a few seconds later;
+the drives are stopped first, with anything pending written. Ctrl-C in a terminal does the
+same, and the window closes by itself.
 
 Settings are kept in `~/.config/pc98-floppy-station/settings.json` (Linux), with `station.log` beside it,
 `%APPDATA%\PC-98 Floppy Station` (Windows) or `~/Library/Application Support/PC-98 Floppy Station` (macOS).
+A drive whose track 0 has drifted (below) gets its steps there too: `"offsets": {"B": 4}`.
 
 ## The bridge on its own
 
@@ -101,4 +98,5 @@ data lands on the wrong tracks.
 
 `test_drive.py` checks the disk layer with a fake drive, `test_bridge.py` runs the bridge end to
 end on image files through the driver, and `test_station.py` drives the window's server through
-its API with backups standing in for both drives. None touches hardware. All three run in CI.
+its API with backups standing in for both drives, through the real bridge. None touches
+hardware. All three run in CI.

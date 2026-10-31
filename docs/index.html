@@ -295,23 +295,23 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
 
   <h3>The bridge</h3>
   <p>The emulator gets two disk-image files, <code>FD1.hdm</code> and <code>FD2.hdm</code>, that it opens like any other image. The files <em>are</em> the drives: every read goes to the floppy as the game asks, writes go back a second after the game stops writing, and a swap is seen through the drive's own disk-change line. This needs a disk driver: <strong>libfuse</strong> on Linux, usually already there; <strong>WinFsp</strong> on Windows; <strong>FUSE-T</strong> on macOS. The window says if it's missing.</p>
-  <p>Each drive has <strong>Back up this disk</strong>, which reads the disk once into <code>Documents/PC98 Floppies</code>, and <strong>Use a backup instead</strong>, which makes that drive play from one of those images rather than the floppy. Saves go to whatever the drive plays from. With backups chosen for both drives, no driver is involved at all.</p>
+  <p>Each drive has <strong>Back up this disk</strong>, which reads the disk once into <code>Documents/PC98 Floppies</code>, and <strong>Use a backup instead</strong>, which makes that drive play from one of those images rather than the floppy. Saves go to whatever the drive plays from; an image goes through the same bridge as a drive.</p>
   <h3>Download</h3>
   <div class="table"><table>
-    <tr><th>System</th><th>Program</th><th>Driver, for playing from the drives</th><th>First start</th></tr>
+    <tr><th>System</th><th>Program</th><th>Driver</th><th>First start</th></tr>
     <tr><td>Linux</td><td><a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage">pc98-floppy-station-linux.AppImage</a></td><td><code>fuse3</code> from your distribution</td><td>Make it executable (right-click → Properties → Permissions), then double-click. It appears in your menu with its icon after the first start. The window opens in your browser.</td></tr>
     <tr><td>Windows</td><td>not yet</td><td><a href="https://winfsp.dev/rel/">WinFsp</a></td><td>Built, not yet tried on a real machine; released once it has been.</td></tr>
     <tr><td>macOS</td><td>not yet</td><td><a href="https://www.fuse-t.org/">FUSE-T</a></td><td>Built for Apple silicon and Intel, not yet tried on a real Mac; same.</td></tr>
   </table></div>
-  <p>One file. The driver is needed to play from the drives; a backup chosen for both drives plays without it. Linux is where it has been developed and tested. All versions are on the <a href="https://github.com/aleitner/pc98-floppy-station/releases">releases page</a>.</p>
+  <p>One file, plus the driver. Linux is where it has been developed and tested. All versions are on the <a href="https://github.com/aleitner/pc98-floppy-station/releases">releases page</a>.</p>
   <h3>From source instead</h3>
-  <pre><code>python3 -m pip install mfusepy pywebview pystray git+https://github.com/keirf/greaseweazle@latest
+  <pre><code>python3 -m pip install mfusepy git+https://github.com/keirf/greaseweazle@latest
 python3 app/station.py</code></pre>
   <p>The Greaseweazle package contains C code, so the first line needs a compiler unless a build for your Python already exists.</p>
   <h3>Use</h3>
   <p>A window opens, in this same style. The first time, it asks you to put a disk in the <strong>left</strong> drive only and press Check: that's how it learns which unit is which. After that it's <strong>Start</strong>, then <strong>Play</strong> if RetroArch with the Neko Project II kai core is installed, or open the two files in your own emulator's first and second drive. The game boots from whatever disk is in the left drive, as on the real machine; games that want a system disk in one drive and the game in the other work the same way.</p>
   <p>A disk whose write notch is covered shows as write-protected and its file is read-only, so the game can never write to it. To swap, open the lever, change the disk, close the lever, then answer the game. Wait a couple of seconds after a save before opening a lever. If a disk comes out first, the pending changes are dropped, never written to the next disk, and the log says so.</p>
-  <p>Press <strong>Stop</strong> when you're done; anything unsaved is written first. Full notes, including the bridge on its own and a flag for a drive whose track 0 has drifted: <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/app/BRIDGE.md">app/BRIDGE.md</a>.</p>
+  <p>Press <strong>Stop</strong> when you're done; anything unsaved is written first. Closing the window stops the drives the same way and ends the program. Full notes, including the bridge on its own and a flag for a drive whose track 0 has drifted: <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/app/BRIDGE.md">app/BRIDGE.md</a>.</p>
 </section>
 
 <section id="disks">

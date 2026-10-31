@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 import mfusepy
 
-from bridge_paths import EXT, GEOMETRY, SYSTEM, cmd_path, default_mountpoint
+from bridge_paths import EXT, GEOMETRY, SYSTEM, cmd_path, default_mountpoint, unmount
 from floppy_drive import Backend, DiskError, GwBackend, GwBoard, ImageBackend, TrackDisk
 
 QUIET_SECONDS = 1.0       # the game has stopped writing: put it on the disk
@@ -105,8 +105,10 @@ class BridgeFS(mfusepy.Operations):
         slot.protected = slot.backend.write_protected()   # pin 28 can settle after the swap
         if changed:
             status(f"{slot.name}: disk changed ({disk_state(slot)})")
+            status(slot_line(slot))
         elif slot.protected != was:
             status(f"{slot.name}: now {disk_state(slot)}")
+            status(slot_line(slot))
 
     # -- writing back --------------------------------------------------------
     def _flush_loop(self) -> None:
@@ -191,10 +193,7 @@ class BridgeFS(mfusepy.Operations):
             return self.play_cmd[offset:offset + size]
         slot = self._slot(path)
 
-        def go() -> bytes:
-            slot.disk.seek(offset)
-            return bytes(slot.disk.read(size) or b"")
-        return self._run(slot, go)
+        return self._run(slot, lambda: slot.disk.read_at(offset, size))
 
     def write(self, path: str, data: bytes, offset: int, fh: int) -> int:
         slot = self._slot(path)
@@ -202,13 +201,14 @@ class BridgeFS(mfusepy.Operations):
         def go() -> int:
             if slot.protected or slot.disk.broken:
                 raise mfusepy.FuseOSError(errno.EROFS)
-            slot.disk.seek(offset)
-            return int(slot.disk.write(data))
+            return slot.disk.write_at(offset, data)
         return self._run(slot, go)
 
     def fsync(self, path: str, datasync: int, fh: int) -> int:
         slot = self.slots.get(path)
-        return 0 if slot is None or self.flush_now(slot) else -errno.EIO
+        if slot is not None and not self.flush_now(slot):
+            raise mfusepy.FuseOSError(errno.EIO)
+        return 0
 
     def statfs(self, path: str) -> Dict[str, int]:
         return dict(f_bsize=1024, f_frsize=1024, f_blocks=2464, f_bfree=0, f_bavail=0, f_namemax=255)
@@ -245,6 +245,12 @@ def disk_state(slot: Slot) -> str:
     return "write-protected" if slot.protected else "writable"
 
 
+def slot_line(slot: Slot) -> str:
+    """One line a program can parse: `slot FD1 disk=1 protected=0`."""
+    has = slot.backend.has_disk()
+    return f"slot {slot.name} disk={int(has)} protected={int(has and slot.protected)}"
+
+
 def watch_stdin(ops: BridgeFS, mountpoint: str) -> None:
     """Stop when the controlling program says 'stop' or goes away (stdin closes)."""
     for line in sys.stdin:
@@ -275,9 +281,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--mountpoint", default=default_mountpoint())
     ap.add_argument("--offset", action="append", default=[], metavar="B=4",
                     help="steps from where a drive thinks track 0 is to the real one")
-    ap.add_argument("--port", help="the board's serial port, if it isn't found by itself")
     ap.add_argument("--image", action="append", default=[], metavar="FD1=PATH",
-                    help="use an image file instead of a drive (testing)")
+                    help="an image file standing in for that drive")
     ap.add_argument("--control-stdin", action="store_true",
                     help="stop when 'stop' arrives on stdin or stdin closes (for a controlling program)")
     args = ap.parse_args(argv)
@@ -291,10 +296,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             leftovers = os.listdir(mountpoint)
         except OSError:                       # a mount left behind by a killed run
-            import shutil
-            import subprocess
-            tool = shutil.which("fusermount3") or shutil.which("fusermount") or "umount"
-            subprocess.run([tool, "-u", mountpoint] if tool != "umount" else [tool, mountpoint], check=False)
+            unmount(mountpoint)
             try:
                 leftovers = os.listdir(mountpoint)
             except OSError as e:
@@ -316,14 +318,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         backends: Dict[str, Backend] = {}
         for name in ("FD1", "FD2"):
             if name in images:
-                img = ImageBackend(images[name], cyls, heads, tb)
-                img.readonly = not os.access(images[name], os.W_OK)
-                backends[name] = img
+                backends[name] = ImageBackend(images[name], cyls, heads, tb)
             elif wanted[name] != "NONE":
                 if board is None:
-                    board = GwBoard(args.port)
-                backends[name] = GwBackend(wanted[name], args.format, board=board,
-                                           cyl_offset=offsets.get(wanted[name], 0))
+                    board = GwBoard()
+                backends[name] = GwBackend(wanted[name], args.format, board, offsets.get(wanted[name], 0))
         for name, backend in backends.items():
             slot = Slot(name, backend, TrackDisk(backend, log=slot_logger(name)))
             slot.protected = backend.write_protected()
@@ -332,6 +331,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             state = "no disk" if not backend.has_disk() else \
                 "write-protected" if slot.protected else "writable"
             status(f"{name}{ext} is {where} ({state})")
+            status(slot_line(slot))
     except Exception as e:
         status(f"error can't open the drives: {e}")
         return 2
@@ -341,13 +341,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     status(f"load {cmd_path(mountpoint, 'play.cmd')} in RetroArch with the Neko Project II kai core")
     if args.control_stdin:
         threading.Thread(target=watch_stdin, args=(ops, mountpoint), daemon=True).start()
-    if SYSTEM != "Windows":
-        import signal
-
-        def ask_to_stop(signum: int, frame: Any) -> None:
-            ops.quit.set()
-            threading.Thread(target=lambda: os.stat(mountpoint), daemon=True).start()
-        signal.signal(signal.SIGTERM, ask_to_stop)
     try:
         mfusepy.FUSE(ops, mountpoint, foreground=True, nothreads=True, **mount_options("pc98drives"))
     except Exception as e:

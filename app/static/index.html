@@ -81,9 +81,8 @@ a { color: var(--cyan); }
   <div class="row"><button type="button" id="identify">Check</button><span id="identmsg" class="msg"></span></div>
 </div>
 
-<div id="driverbox" class="box" hidden>
-  <p>Playing from the drives needs a disk driver, which isn't installed. Playing from backups works without it. <span id="driverhint"></span></p>
-  <div class="row"><button type="button" class="small" data-post="/api/driver">Check again</button></div>
+<div id="driverbox" class="box warn" hidden>
+  <p><strong>The disk driver isn't installed.</strong> <span id="driverhint"></span></p>
 </div>
 
 <div class="grid">
@@ -116,7 +115,7 @@ a { color: var(--cyan); }
 <h2 style="margin-top:16px">Log <small>ログ</small></h2>
 <pre class="log" id="log"></pre>
 
-<footer><span class="cur" id="ready">READY</span><span id="files"></span><span id="ver"></span><span id="footnote"></span></footer>
+<footer><span class="cur" id="ready">READY</span><span id="ver"></span><span>Closing this window stops the drives and ends the program.</span></footer>
 </div></div>
 
 <script>
@@ -169,9 +168,9 @@ a { color: var(--cyan); }
     return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.library.folder);
   }
   function render() {
-    $("sys").textContent = S.system + " \u00b7 " + (S.board.port || (S.busy ? "board in use" : "no board"));
+    $("sys").textContent = S.system;
     $("setup").hidden = S.identified;
-    $("driverhint").textContent = S.driver.hint + (S.driver.detail ? " (" + S.driver.detail + ")" : "");
+    $("driverhint").textContent = S.driver.hint;
     drive($("fd1"), "FD1", S.drives.FD1);
     drive($("fd2"), "FD2", S.drives.FD2);
     $("board").textContent = S.board.present ? (S.board.port ? "connected on " + S.board.port : "connected, in use") : "not found";
@@ -183,13 +182,11 @@ a { color: var(--cyan); }
     else { b.textContent = "stopped"; b.className = "off"; }
     var ss = $("startstop");
     ss.textContent = S.running ? "STOP" : "START";
-    var allImages = !!(S.drives.FD1.image && S.drives.FD2.image);
-    ss.disabled = (!S.running && S.busy) || (!S.running && !allImages && (!S.identified || !S.driver.ok || !S.board.present));
-    $("driverbox").hidden = S.driver.ok || allImages || !S.driver.checked;
+    ss.disabled = !S.running && (S.busy || !S.driver.ok || (!S.all_images && (!S.identified || !S.board.present)));
+    $("driverbox").hidden = S.driver.ok;
     $("probe").disabled = S.busy;
     $("swap").disabled = S.busy || !S.identified;
     $("identify").disabled = S.busy;
-    $("footnote").textContent = S.tray ? "Closing this window hides it; Quit in the tray icon ends the program." : "Closing this window stops the drives and ends the program.";
     $("emuline").innerHTML = S.emulator.custom ? "your own command" :
       S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" : '<b class="bad">RetroArch with the PC-98 core not found</b>; open the two files in your emulator';
     $("play").disabled = !(S.running && S.ready && (S.emulator.found || S.emulator.custom));
@@ -198,7 +195,6 @@ a { color: var(--cyan); }
     log.textContent = S.log.join("\n");
     if (atEnd) log.scrollTop = log.scrollHeight;
     $("ready").textContent = S.running ? (S.ready ? "RUNNING" : "WAIT") : "READY";
-    $("files").textContent = S.running ? "play.cmd: " + S.play : "";
     $("ver").textContent = "v" + S.version;
     if (S.message !== lastServerMsg) { lastServerMsg = S.message; $("msg").textContent = S.message || ""; }
   }
@@ -234,7 +230,7 @@ a { color: var(--cyan); }
   document.addEventListener("change", function (e) {
     var sel = e.target.closest("select[data-useimage]"); if (!sel || !sel.value) return;
     var im = {}; im[sel.dataset.useimage] = sel.value; sel.blur();
-    post("/api/settings", { image: im }).then(function (j) { if (!j || j.message !== "saved") sel.value = ""; });
+    post("/api/settings", { image: im }).then(function () { sel.value = ""; });   // the redraw shows the real state
   });
   window.addEventListener("pagehide", function () {
     try { navigator.sendBeacon("/api/bye", JSON.stringify({ token: TOKEN })); } catch (e) {}

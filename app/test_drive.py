@@ -67,9 +67,8 @@ def main() -> int:
     d = FakeDrive()
     d.unreadable.add((0, 0))
     disk = TrackDisk(d)
-    disk.seek(3 * 1024)
     try:
-        disk.write(b"x" * 16)
+        disk.write_at(3 * 1024, b"x" * 16)
         check(False, "write refused while track 0 is unreadable")
     except DiskError as e:
         check(e.errno == 30, "write refused while track 0 is unreadable")
@@ -77,22 +76,19 @@ def main() -> int:
 
     # 2. Once track 0 reads, writes are accepted and reach the disk on flush, verified.
     d.unreadable.clear()
-    disk.seek(3 * 1024)
-    disk.write(b"x" * 16)
+    disk.write_at(3 * 1024, b"x" * 16)
     check(disk.verified and disk.dirty_tracks == 1, "write accepted after track 0 decoded")
     check(disk.flush_to_disk() == 1 and d.data[(1, 1)][:16] == b"x" * 16, "flush writes the one dirty track")
 
     # 3. A swap drops pending writes; they never land on the new disk.
-    disk.seek(5 * 1024)
-    disk.write(b"y" * 8)
+    disk.write_at(5 * 1024, b"y" * 8)
     before = d.writes
     lost = disk.new_disk()
     check(lost == 1 and disk.dirty_tracks == 0 and d.writes == before, "pending write dropped on swap")
     check(not disk.verified, "a new disk must prove its track 0 again")
 
     # 4. A swap seen at flush time refuses the write and marks the disk broken.
-    disk.seek(2 * 1024)
-    disk.write(b"z" * 8)
+    disk.write_at(2 * 1024, b"z" * 8)
     d.changed = True
     try:
         disk.flush_to_disk()
@@ -103,15 +99,13 @@ def main() -> int:
     # 4b. Once the swap is acknowledged and the disk started over, saving to the NEW disk works.
     check(d.poll_change() is True and d.poll_change() is False, "a swap is reported once, then acknowledged")
     disk.new_disk()
-    disk.seek(2 * 1024)
-    disk.write(b"n" * 8)
+    disk.write_at(2 * 1024, b"n" * 8)
     check(disk.flush_to_disk() == 1 and d.data[(1, 0)][:8] == b"n" * 8, "saves after a swap reach the new disk")
 
     # 4c. A swap noticed between write and flush refuses the write too.
     d.changed = True
     try:
-        disk.seek(0)
-        disk.write(b"late")
+        disk.write_at(0, b"late")
         check(False, "a write after an unacknowledged swap is refused")
     except DiskError:
         check(True, "a write after an unacknowledged swap is refused")
@@ -121,8 +115,7 @@ def main() -> int:
     # 5. A write that can't be verified marks the disk broken; later writes are refused.
     d2 = FakeDrive()
     disk2 = TrackDisk(d2)
-    disk2.seek(0)
-    disk2.write(b"q" * 8)
+    disk2.write_at(0, b"q" * 8)
     d2.unwritable.add((0, 0))
     try:
         disk2.flush_to_disk()
@@ -130,7 +123,7 @@ def main() -> int:
     except DiskError:
         check(disk2.broken is not None, "unverifiable write marks the disk broken")
     try:
-        disk2.write(b"r")
+        disk2.write_at(0, b"r")
         check(False, "no writes after the disk is broken")
     except DiskError:
         check(True, "no writes after the disk is broken")
@@ -139,27 +132,26 @@ def main() -> int:
     d3 = FakeDrive()
     disk3 = TrackDisk(d3)
     d3.unreadable.add((1, 0))                # track index 2
-    disk3.seek(1024 + 512)                   # starts in track 1, runs into track 2
     try:
-        disk3.write(b"w" * 1024)
+        disk3.write_at(1024 + 512, b"w" * 1024)   # starts in track 1, runs into track 2
         check(False, "a multi-track write stops before changing anything if a track is unreadable")
     except DiskError:
         check(disk3.dirty_tracks == 0 and disk3._cache.get(1) is None or disk3._cache[1][512:] != b"w" * 512,
               "a multi-track write stops before changing anything if a track is unreadable")
     d3.unreadable.clear()
-    disk3.seek(1024 + 512)
-    disk3.write(b"w" * 1024)
+    disk3.write_at(1024 + 512, b"w" * 1024)
     check(disk3.dirty_tracks == 2, "the same write succeeds once every track reads")
 
-    # 6. An image opened read-only reports write protection, like a covered notch.
+    # 6. A read-only image file counts as write-protected, like a covered notch.
     import os
     import tempfile
     path = os.path.join(tempfile.mkdtemp(prefix="drivetest"), "a.img")
     with open(path, "wb") as f:
         f.write(b"\0" * (4 * 2 * 1024))
-    img = ImageBackend(path, 4, 2, 1024)
-    img.readonly = True
-    check(img.write_protected(), "read-only image reports write protection")
+    os.chmod(path, 0o444)
+    check(ImageBackend(path, 4, 2, 1024).write_protected(), "read-only image counts as write-protected")
+    os.chmod(path, 0o644)
+    check(not ImageBackend(path, 4, 2, 1024).write_protected(), "writable image counts as writable")
     os.remove(path)
 
     print("ALL PASS" if not fails else f"{fails} FAILED")

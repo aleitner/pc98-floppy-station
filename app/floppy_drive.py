@@ -13,7 +13,6 @@ Greaseweazle library; ImageBackend uses an image file and exists for testing.
 """
 from __future__ import annotations
 
-import io
 import os
 import threading
 import time
@@ -41,16 +40,13 @@ class Backend(Protocol):
 
 # --------------------------------------------------------------------------- backends
 class ImageBackend:
-    """Tracks stored in an image file. For tests; never touches hardware."""
+    """Tracks stored in an image file: a backup standing in for a drive. A file that can't
+    be written counts as write-protected, like a covered notch."""
 
-    def __init__(self, path: str, cyls: int, heads: int, track_bytes: int,
-                 fail_reads: Optional[Set[Tuple[int, int]]] = None) -> None:
+    def __init__(self, path: str, cyls: int, heads: int, track_bytes: int) -> None:
         self.path, self.cyls, self.heads, self.track_bytes = path, cyls, heads, track_bytes
-        self.fail_reads: Set[Tuple[int, int]] = fail_reads or set()
-        self.reads = 0
-        self.writes = 0
         self.changed = False
-        self.readonly = False
+        self.readonly = not os.access(path, os.W_OK)
         self._ino = self._inode()
 
     def _inode(self) -> int:
@@ -63,15 +59,11 @@ class ImageBackend:
         return (cyl * self.heads + head) * self.track_bytes
 
     def read_track(self, cyl: int, head: int) -> Optional[bytes]:
-        self.reads += 1
-        if (cyl, head) in self.fail_reads:
-            return None
         with open(self.path, "rb") as f:
             f.seek(self._offset(cyl, head))
             return f.read(self.track_bytes)
 
     def write_track(self, cyl: int, head: int, data: bytes) -> bool:
-        self.writes += 1
         with open(self.path, "r+b") as f:
             f.seek(self._offset(cyl, head))
             f.write(data)
@@ -104,14 +96,20 @@ class ImageBackend:
 class GwBoard:
     """One Greaseweazle, shared by the drives on its ribbon: only one can be selected at a time."""
 
-    def __init__(self, port: Optional[str] = None) -> None:
+    def __init__(self) -> None:
         from greaseweazle.tools import util
-        self.usb = util.usb_open(port)
+        self.usb = util.usb_open(None)
         self.lock = threading.RLock()
         self.selected: Optional["GwBackend"] = None
 
     def close(self) -> None:
         self.usb.ser.close()
+
+    def __enter__(self) -> "GwBoard":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 class GwBackend:
@@ -125,8 +123,7 @@ class GwBackend:
     READ_ATTEMPTS = 4
     WRITE_ATTEMPTS = 3
 
-    def __init__(self, drive_letter: str, fmt_name: str, port: Optional[str] = None,
-                 board: Optional[GwBoard] = None, cyl_offset: int = 0) -> None:
+    def __init__(self, drive_letter: str, fmt_name: str, board: GwBoard, cyl_offset: int = 0) -> None:
         # Imported here so tests that only use ImageBackend don't need the hardware stack.
         from greaseweazle.tools import util
         from greaseweazle.codec import codec
@@ -144,9 +141,8 @@ class GwBackend:
         self.track_bytes = len(probe.get_img_track())
 
         self._cyl_offset = cyl_offset      # steps from where this drive thinks track 0 is to the real one
-        self._owns_board = board is None
-        self._board = board or GwBoard(port)
-        self._usb = self._board.usb
+        self._board = board
+        self._usb = board.usb
         self._drive = util.Drive()(drive_letter)
         self._lock = self._board.lock
         self._active = False
@@ -351,51 +347,32 @@ class GwBackend:
                     self._deselect()
             finally:
                 self._active = False
-                if self._owns_board:
-                    self._board.close()
+
+    def __enter__(self) -> "GwBackend":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 # --------------------------------------------------------------------------- the disk
-class TrackDisk(io.RawIOBase):
-    """The whole disk as one seekable file, backed by a track cache over a Backend.
+class TrackDisk:
+    """The whole disk as one addressable block, backed by a track cache over a Backend.
 
-    Thread-safe. Writes land in the cache and are written to the disk by flush(),
+    Thread-safe. Writes land in the cache and go to the disk in flush_to_disk(),
     which the owner calls after a quiet period and before unmounting.
     """
 
     def __init__(self, backend: Backend, log: Callable[[str], None] = lambda s: None) -> None:
-        super().__init__()
         self.b = backend
         self.size = backend.cyls * backend.heads * backend.track_bytes
         self._cache: Dict[int, bytearray] = {}
         self._dirty: Set[int] = set()
-        self._pos = 0
         self._lock = threading.RLock()
         self._log = log
         self.last_write = 0.0
         self.broken: Optional[str] = None     # set once the disk is unsafe to write
         self.verified = False                 # track 0 of this disk has decoded on this drive
-
-    # io plumbing ----------------------------------------------------------
-    def readable(self) -> bool:
-        return True
-
-    def writable(self) -> bool:
-        return True
-
-    def seekable(self) -> bool:
-        return True
-
-    def tell(self) -> int:
-        return self._pos
-
-    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
-        base = {io.SEEK_SET: 0, io.SEEK_CUR: self._pos, io.SEEK_END: self.size}[whence]
-        self._pos = max(0, base + offset)
-        return self._pos
-
-    def truncate(self, size: Optional[int] = None) -> int:
-        return self.size          # a floppy has a fixed size
 
     # tracks ---------------------------------------------------------------
     def _track(self, idx: int) -> bytearray:
@@ -411,20 +388,20 @@ class TrackDisk(io.RawIOBase):
                 self.verified = True
         return t
 
-    def readinto(self, buf: "memoryview | bytearray") -> int:   # type: ignore[override]
+    def read_at(self, offset: int, size: int) -> bytes:
+        """`size` bytes from `offset`, reading tracks from the disk as needed."""
         with self._lock:
-            n = min(len(buf), max(0, self.size - self._pos))
-            done = 0
+            n = min(size, max(0, self.size - offset))
+            out = bytearray()
             tb = self.b.track_bytes
-            while done < n:
-                idx, off = divmod(self._pos + done, tb)
-                chunk = min(n - done, tb - off)
-                buf[done:done + chunk] = self._track(idx)[off:off + chunk]
-                done += chunk
-            self._pos += n
-            return n
+            while len(out) < n:
+                idx, off = divmod(offset + len(out), tb)
+                chunk = min(n - len(out), tb - off)
+                out += self._track(idx)[off:off + chunk]
+            return bytes(out)
 
-    def write(self, data: "bytes | bytearray | memoryview") -> int:  # type: ignore[override]
+    def write_at(self, offset: int, data: "bytes | bytearray | memoryview") -> int:
+        """Put `data` at `offset` into the cache, marking changed tracks for the next flush."""
         with self._lock:
             if self.broken:
                 raise DiskError(5, self.broken)
@@ -441,21 +418,20 @@ class TrackDisk(io.RawIOBase):
                     raise DiskError(30, "track 0 can't be read on this drive, so writing is refused "
                                         "(blank disk, dirty heads, or a drive that has lost its track 0)")
             mv = memoryview(data).cast("B")
-            n = min(len(mv), max(0, self.size - self._pos))
+            n = min(len(mv), max(0, self.size - offset))
             tb = self.b.track_bytes
             if n:
-                for idx in range(self._pos // tb, (self._pos + n - 1) // tb + 1):
+                for idx in range(offset // tb, (offset + n - 1) // tb + 1):
                     self._track(idx)         # read every track touched first: all or nothing
             done = 0
             while done < n:
-                idx, off = divmod(self._pos + done, tb)
+                idx, off = divmod(offset + done, tb)
                 chunk = min(n - done, tb - off)
                 t = self._track(idx)
                 if t[off:off + chunk] != mv[done:done + chunk]:
                     t[off:off + chunk] = mv[done:done + chunk]
                     self._dirty.add(idx)
                 done += chunk
-            self._pos += n
             self.last_write = time.monotonic()
             return n
 
@@ -490,12 +466,6 @@ class TrackDisk(io.RawIOBase):
                 self._log(f"wrote track {cyl}.{head}")
             return written
 
-    def drop_cache(self) -> None:
-        with self._lock:
-            if self._dirty:
-                raise DiskError(5, "unsaved changes")
-            self._cache.clear()
-
     def new_disk(self) -> int:
         """A different disk is in the drive: forget the old one. Returns how many unsaved
         tracks were lost; they belong to the old disk and must never go onto this one."""
@@ -507,5 +477,3 @@ class TrackDisk(io.RawIOBase):
             self.verified = False
             return lost
 
-    def close(self) -> None:          # the owner closes the backend explicitly
-        pass

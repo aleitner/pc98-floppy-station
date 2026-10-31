@@ -3,13 +3,12 @@
 Double-click it (or run `python3 station.py`). A window shows the Greaseweazle and both
 drives, Start/Stop, the two image files an emulator opens, and a Play button when
 RetroArch with the PC-98 core is installed. Each drive can be backed up to an image file,
-and a backup can stand in for a drive: then the game plays from that file instead.
+and a backup can stand in for a drive: the bridge then serves that file instead.
 
-The bridge itself runs as a child process (floppy_bridge.py), so a drive fault can never
-take the window down. Settings live in the user's config folder, next to a log file.
+The bridge runs as a child process (floppy_bridge.py), so a drive fault can never take the
+window down. Settings and a log live in the user's config folder.
 
-    station.py                 open the window (its own window where the system allows,
-                               otherwise a bare browser window, otherwise a browser tab)
+    station.py                 open the window (a bare browser window, or a browser tab)
     station.py --no-browser    serve only; open http://127.0.0.1:9801 yourself
     station.py --bridge ...    run the bridge (used internally when packaged)
 """
@@ -25,8 +24,6 @@ import os
 import platform
 import secrets
 import shutil
-import socket
-import stat
 import subprocess
 import sys
 import threading
@@ -37,7 +34,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
-from bridge_paths import EXT, cmd_path, default_mountpoint
+from bridge_paths import EXT, cmd_path, default_mountpoint, unmount
 
 SYSTEM = platform.system()
 PORT = 9801
@@ -45,12 +42,9 @@ APP_NAME = "PC-98 Floppy Station"
 VERSION = "0.2.0"
 FROZEN = getattr(sys, "frozen", False)
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-STATIC = os.path.realpath(os.path.join(HERE, "static"))   # canonical, so served paths compare
+STATIC = os.path.realpath(os.path.join(HERE, "static"))
 SLOTS = ("FD1", "FD2")
 MAX_BODY = 64 * 1024
-
-WINFSP_URL = "https://winfsp.dev/rel/"
-FUSET_URL = "https://www.fuse-t.org/"
 
 log = logging.getLogger("station")
 
@@ -65,44 +59,20 @@ def config_dir() -> str:
                         "pc98-floppy-station")
 
 
-def documents_dir() -> str:
-    """The user's Documents folder, asking Windows where it really is (it may be redirected)."""
-    if SYSTEM == "Windows":
-        try:
-            import ctypes
-            buf = ctypes.create_unicode_buffer(1024)
-            csidl_personal = 5
-            shell = ctypes.windll.shell32  # type: ignore[attr-defined]
-            if shell.SHGetFolderPathW(None, csidl_personal, None, 0, buf) == 0 and buf.value:
-                return str(buf.value)
-        except Exception:
-            pass
-    docs = os.path.join(os.path.expanduser("~"), "Documents")
-    return docs if os.path.isdir(docs) else os.path.expanduser("~")
-
-
 def default_library() -> str:
-    return os.path.join(documents_dir(), "PC98 Floppies")
-
-
-def files_folder() -> str:
-    """Where the files go when both drives play from images. No driver is involved, so it
-    must be a plain folder; and the emulator's .cmd file can't hold spaces, so on Windows
-    it sits outside the user profile, whose path usually has them."""
-    if SYSTEM == "Windows":
-        return os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "PC98Images")
-    return os.path.expanduser("~/PC98Images")
+    docs = os.path.join(os.path.expanduser("~"), "Documents")
+    return os.path.join(docs if os.path.isdir(docs) else os.path.expanduser("~"), "PC98 Floppies")
 
 
 @dataclass
 class Config:
     left: str = ""                 # "A" or "B": which drive is the left one; "" = not yet identified
     format: str = "pc98.2hd"
-    mountpoint: str = field(default_factory=default_mountpoint)   # where the bridge puts the files
+    mountpoint: str = field(default_factory=default_mountpoint)
     library: str = ""              # where backups live; "" = Documents/PC98 Floppies
-    offsets: Dict[str, int] = field(default_factory=dict)
-    emulator_command: str = ""     # custom launch command with {play} {fd1} {fd2}; "" = find RetroArch
-    images: Dict[str, str] = field(default_factory=dict)   # FD1/FD2 -> image file standing in for the drive
+    offsets: Dict[str, int] = field(default_factory=dict)      # drive letter -> steps, for a drive whose track 0 slipped
+    emulator_command: str = ""     # own launch command with {play} {fd1} {fd2}; "" = find RetroArch
+    images: Dict[str, str] = field(default_factory=dict)       # FD1/FD2 -> image file standing in for the drive
 
     @property
     def right(self) -> str:
@@ -200,11 +170,48 @@ def list_library(library: str, ext: str) -> List[str]:
     return sorted(names, key=str.lower)
 
 
-def writable(path: str) -> bool:
-    return os.access(path, os.W_OK)
+# -- running other programs ------------------------------------------------------------
+def external_env() -> Dict[str, str]:
+    """The environment for programs that are not ours. The packaged build points
+    LD_LIBRARY_PATH at its own bundled libraries, which breaks system programs such as the
+    browser or flatpak when they inherit it; hand them the environment we were started with."""
+    env = dict(os.environ)
+    for key in [k for k in env if k.startswith("_PYI_")]:
+        env.pop(key, None)
+    for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        orig = env.pop(var + "_ORIG", None)
+        if orig is not None:
+            env[var] = orig
+        elif FROZEN:
+            env.pop(var, None)
+    return env
 
 
-# -- hardware checks (only while nothing is running: the bridge owns the board) ------
+def run_external(cmd: Union[List[str], str]) -> None:
+    subprocess.Popen(cmd, env=external_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=(SYSTEM != "Windows"))
+
+
+def open_in_browser(url: str) -> None:
+    try:
+        if SYSTEM == "Windows":
+            os.startfile(url)  # type: ignore[attr-defined]
+        elif SYSTEM == "Darwin":
+            run_external(["open", url])
+        else:
+            run_external(["xdg-open", url])
+    except OSError:
+        webbrowser.open(url)
+
+
+def self_command(args: List[str]) -> List[str]:
+    """How to run this program again: the frozen executable, or the interpreter on this file."""
+    if FROZEN:
+        return [sys.executable] + args
+    return [sys.executable, os.path.abspath(__file__)] + args
+
+
+# -- hardware checks (only while nothing owns the board) ----------------------------------
 _board_cache: Tuple[float, Optional[str]] = (0.0, None)
 
 
@@ -224,86 +231,38 @@ def board_port(max_age: float = 3.0) -> Optional[str]:
 
 
 def driver_check() -> Tuple[bool, str]:
-    """Can the FUSE layer be loaded? Runs in a child so a later install is seen without a restart."""
+    """Can the FUSE layer be loaded? Decided once per start: installing it means restarting."""
     try:
-        out = subprocess.run(self_command(["--check-driver"]), capture_output=True, text=True,
-                             encoding="utf-8", errors="replace", timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as e:
+        import mfusepy  # noqa: F401
+        return True, "ok"
+    except Exception as e:
         return False, str(e)
-    return out.returncode == 0, out.stdout.strip() or out.stderr.strip()
 
 
 def driver_hint() -> str:
     if SYSTEM == "Windows":
-        return f"Install WinFsp from {WINFSP_URL}, then press Check again."
+        return "Install WinFsp from https://winfsp.dev/rel/ and start this program again."
     if SYSTEM == "Darwin":
-        return f"Install FUSE-T from {FUSET_URL} (or macFUSE), then press Check again."
-    return "Install your distribution's fuse3 package (the fusermount3 command), then press Check again."
+        return "Install FUSE-T from https://www.fuse-t.org/ (or macFUSE) and start this program again."
+    return "Install your distribution's fuse3 package (the fusermount3 command) and start this program again."
 
 
 def probe_drives(cfg: Config) -> Dict[str, Dict[str, Any]]:
     """Disk present and write-protect state of both drives, by letter."""
     from floppy_drive import GwBackend, GwBoard
-    board = GwBoard(None)
     out: Dict[str, Dict[str, Any]] = {}
-    try:
+    with GwBoard() as board:
         for letter in ("A", "B"):
-            be = GwBackend(letter, cfg.format, board=board, cyl_offset=cfg.offsets.get(letter, 0))
-            try:
+            with GwBackend(letter, cfg.format, board, cfg.offsets.get(letter, 0)) as be:
                 out[letter] = {"disk": be.has_disk(), "protected": be.write_protected()}
-            finally:
-                be.close()
-    finally:
-        board.close()
     return out
 
 
-def external_env() -> Dict[str, str]:
-    """The environment for programs that are not ours. The packaged build points
-    LD_LIBRARY_PATH at its own bundled libraries, which breaks system programs such as the
-    browser or flatpak when they inherit it; hand them the environment we were started with."""
-    env = dict(os.environ)
-    for key in [k for k in env if k.startswith("_PYI_") or k == "_MEIPASS2"]:
-        env.pop(key, None)
-    for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
-        orig = env.pop(var + "_ORIG", None)
-        if orig is not None:
-            env[var] = orig
-        elif FROZEN:
-            env.pop(var, None)
-    return env
-
-
-def run_external(cmd: List[str], **kwargs: Any) -> "subprocess.Popen[bytes]":
-    return subprocess.Popen(cmd, env=external_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, start_new_session=(SYSTEM != "Windows"), **kwargs)
-
-
-def open_in_browser(url: str) -> None:
-    """The system's default browser, with a clean environment (webbrowser.open would pass ours)."""
-    try:
-        if SYSTEM == "Windows":
-            os.startfile(url)  # type: ignore[attr-defined]
-        elif SYSTEM == "Darwin":
-            run_external(["open", url])
-        else:
-            run_external(["xdg-open", url])
-    except OSError:
-        webbrowser.open(url)
-
-
 # -- the bridge as a child process ------------------------------------------------
-def self_command(args: List[str]) -> List[str]:
-    """How to run this program again: the frozen executable, or the interpreter on this file."""
-    if FROZEN:
-        return [sys.executable] + args
-    return [sys.executable, os.path.abspath(__file__)] + args
-
-
 class Bridge:
-    def __init__(self) -> None:
+    def __init__(self, note: Callable[[str], None]) -> None:
         self.proc: Optional[subprocess.Popen[str]] = None
-        self.log: Deque[str] = collections.deque(maxlen=60)
+        self.note = note
         self.lines = 0                       # every line ever read: progress, for stop()
         self.ready = False
         self.slots: Dict[str, Dict[str, Any]] = {}
@@ -324,9 +283,7 @@ class Bridge:
                 if n:
                     args += ["--offset", f"{letter}={n}"]
             for name, path in cfg.images.items():
-                if path:
-                    args += ["--image", f"{name}={path}"]
-            self.log.clear()
+                args += ["--image", f"{name}={path}"]
             self.slots = {}
             self.error = ""
             self.ready = False
@@ -340,40 +297,36 @@ class Bridge:
         assert proc.stdout is not None
         for raw in proc.stdout:
             line = raw.rstrip()
-            if line.startswith("STATUS "):
-                line = line[7:]
             self.lines += 1
-            self.log.append(time.strftime("%H:%M:%S ") + line)
+            if not line.startswith("STATUS "):
+                log.info("bridge: %s", line)       # a traceback or a library warning
+                continue
+            line = line[7:]
             try:
                 self._parse(line)
-            except Exception:                # a strange line must never stop the reader
+            except Exception:
                 log.exception("bridge line not understood: %r", line)
+            if not line.startswith("slot "):
+                self.note(line)
         code = proc.wait()
         self.ready = False
-        if code not in (0, None) and not self.error:
+        if code != 0 and not self.error:
             self.error = f"the bridge stopped with code {code}"
-        self.log.append(time.strftime("%H:%M:%S ") + "bridge exited")
+        self.note("bridge exited")
 
     def _parse(self, line: str) -> None:
         if line == "ready":
             self.ready = True
         elif line.startswith("error "):
             self.error = line[6:]
-        elif line.startswith("FD") and " is " in line and line.endswith(")") and "(" in line:
-            # "FD1.hdm is drive A (writable)"  or  "FD1.hdm is /path/to/image.hdm (write-protected)"
-            name = line.split(".", 1)[0]
-            state = line.rsplit("(", 1)[1].rstrip(")")
-            self.slots[name] = {"disk": state != "no disk", "protected": state == "write-protected"}
-        elif (": disk changed (" in line or ": now " in line) and line.startswith("FD"):
-            name = line.split(":", 1)[0]
-            state = line.rsplit("(", 1)[1].rstrip(")") if "(" in line else line.rsplit(" now ", 1)[1]
-            slot = self.slots.setdefault(name, {})
-            slot["disk"] = state != "no disk"
-            slot["protected"] = state == "write-protected"
+        elif line.startswith("slot "):                 # "slot FD1 disk=1 protected=0"
+            parts = line.split()
+            fields = dict(p.split("=", 1) for p in parts[2:])
+            self.slots[parts[1]] = {"disk": fields.get("disk") == "1", "protected": fields.get("protected") == "1"}
 
     def stop(self, mountpoint: str) -> str:
-        """Ask the bridge to stop and wait while it is still saving. It writes every pending
-        track first, and a long save keeps printing progress; only silence means it's stuck."""
+        """Ask the bridge to stop and wait while it is still saving; it prints progress for
+        every track written, so only silence means it is stuck."""
         with self.lock:
             proc = self.proc
             if proc is None or proc.poll() is not None:
@@ -385,173 +338,29 @@ class Bridge:
                 proc.stdin.close()
             except OSError:
                 pass
-            deadline = time.monotonic() + 600
-            while time.monotonic() < deadline:
-                seen = self.lines
-                try:
-                    proc.wait(20)
-                    return "stopped"
-                except subprocess.TimeoutExpired:
-                    if self.lines == seen:
-                        break                  # nothing for 20 s: it isn't saving, it's stuck
-            if SYSTEM != "Windows":
-                # an unmount from outside makes the bridge write what is pending and exit;
-                # keep waiting while it reports progress, as above
-                tool = shutil.which("fusermount3") or shutil.which("fusermount")
-                subprocess.run([tool, "-u", mountpoint] if tool else ["umount", mountpoint], check=False,
-                               env=external_env())
-                while time.monotonic() < deadline:
-                    seen = self.lines
-                    try:
-                        proc.wait(20)
-                        return "stopped"
-                    except subprocess.TimeoutExpired:
-                        if self.lines == seen:
-                            break
-                proc.terminate()               # asks for a clean stop (the bridge handles it)
-                try:
-                    proc.wait(30)
-                    return "stopped"
-                except subprocess.TimeoutExpired:
-                    pass
-            proc.kill()                        # WinFsp drops the volume when the process ends
+            if self._wait_while_busy(proc):
+                return "stopped"
+            unmount(mountpoint)                 # the system's unmount also makes it write and exit
+            if self._wait_while_busy(proc):
+                return "stopped"
+            proc.kill()
             try:
                 proc.wait(10)
             except subprocess.TimeoutExpired:
                 return "the bridge did not stop; anything unsaved may be lost"
             return "stopped by force; anything unsaved may be lost"
 
-
-# -- playing from image files only: plain files, no driver -------------------------------
-class ImagePlay:
-    """Both drives stand in as images. Each is copied into a plain folder for the emulator,
-    with a note of where it came from; on Stop the changes are copied back. If the program
-    dies in between, the next Start finds the note and copies the changes back first."""
-
-    def __init__(self, cfg: Config, note: Callable[[str], None]) -> None:
-        self.cfg = cfg
-        self.note = note
-        self.folder = files_folder()
-        self.active = False
-
-    def _targets(self) -> Dict[str, str]:
-        ext = EXT[self.cfg.format]
-        return {n: os.path.join(self.folder, n + ext) for n in SLOTS}
-
-    def start(self) -> str:
-        if " " in self.folder:
-            return f"the folder {self.folder} has a space in its path; the emulator can't open that"
-        if os.path.ismount(self.folder):
-            return f"{self.folder} is a mounted drive (is the bridge running?)"
-        for name in SLOTS:
-            src = self.cfg.images.get(name, "")
-            if not src or not os.path.isfile(src):
-                return f"{name}: the image {os.path.basename(src) or '?'} is missing"
-        try:
-            os.makedirs(self.folder, exist_ok=True)
-            self.recover()
-            sources: Dict[str, str] = {}
-            for name, target in self._targets().items():
-                src = os.path.abspath(self.cfg.images[name])
-                shutil.copyfile(src, target)
-                os.chmod(target, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH |
-                         (stat.S_IWUSR if writable(src) else 0))
-                sources[target] = src
-                self.note(f"{name}: {os.path.basename(src)}" + ("" if writable(src) else " (write-protected)"))
-            with open(os.path.join(self.folder, "sources.json"), "w", encoding="utf-8") as f:
-                json.dump(sources, f)
-            names = " ".join(cmd_path(self.folder, n + EXT[self.cfg.format]) for n in SLOTS)
-            with open(os.path.join(self.folder, "play.cmd"), "w") as f:
-                f.write(f"np2kai {names}\n")
-        except OSError as e:
-            self.cleanup()
-            return f"couldn't set up the files: {e} (is the emulator still open?)"
-        self.active = True
-        self.note("ready")
-        return "starting"
-
-    def _sources(self) -> Dict[str, str]:
-        try:
-            with open(os.path.join(self.folder, "sources.json"), encoding="utf-8") as f:
-                data = json.load(f)
-            return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
-        except (OSError, ValueError, AttributeError):
-            return {}
-
-    def recover(self) -> None:
-        """Changes left in the folder by a run that never reached Stop go back to their images."""
-        kept = self.write_back(self._sources(), "recovered")
-        self.cleanup(keep=kept)
-        if kept:
-            raise OSError(f"{len(kept)} changed cop(y/ies) could not be written back; "
-                          f"they are kept in {self.folder}")
-
-    def write_back(self, sources: Dict[str, str], how: str) -> Dict[str, str]:
-        """Copy each changed copy back over its image. Returns the copies that could NOT be
-        put back (their changes would be lost if the copy were removed)."""
-        kept: Dict[str, str] = {}
-        for target, src in sources.items():
+    def _wait_while_busy(self, proc: "subprocess.Popen[str]") -> bool:
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            seen = self.lines
             try:
-                if not os.path.isfile(target):
-                    continue
-                with open(target, "rb") as f:
-                    data = f.read()
-                if os.path.isfile(src):
-                    with open(src, "rb") as f:
-                        if f.read() == data:
-                            continue                   # nothing changed
-                    if not writable(src):
-                        # a protected image: the copy was read-only too, so a difference here
-                        # means someone changed the file by hand; keep it rather than guess
-                        kept[target] = src
-                        self.note(f"error {os.path.basename(src)} is write-protected but its copy "
-                                  f"differs; the copy is kept at {target}")
-                        continue
-                else:
-                    kept[target] = src
-                    self.note(f"error {os.path.basename(src)} is gone; its changed copy is kept at {target}")
-                    continue
-                tmp = src + ".part"
-                with open(tmp, "wb") as f:
-                    f.write(data)
-                os.replace(tmp, src)
-                self.note(f"{os.path.basename(src)} {how}: the game's changes are in it")
-            except OSError as e:
-                kept[target] = src
-                self.note(f"error couldn't write back to {os.path.basename(src)}: {e}; "
-                          f"the changed copy is kept at {target}")
-        return kept
-
-    def stop(self) -> str:
-        kept = self.write_back(self._sources(), "updated")
-        self.cleanup(keep=kept)
-        self.active = False
-        if kept:
-            return f"stopped, but {len(kept)} changed cop(y/ies) could not be written back; kept in {self.folder}"
-        return "stopped"
-
-    def cleanup(self, keep: Optional[Dict[str, str]] = None) -> None:
-        """Remove the play files, except copies whose changes have nowhere to go; those stay,
-        with a sources.json naming them, so a later start can try again."""
-        keep = keep or {}
-        for path in list(self._targets().values()) + [os.path.join(self.folder, "play.cmd")]:
-            if path in keep:
-                continue
-            try:
-                if os.path.lexists(path):
-                    os.chmod(path, stat.S_IWUSR | stat.S_IRUSR)
-                    os.remove(path)
-            except OSError as e:
-                self.note(f"error couldn't remove {os.path.basename(path)}: {e} (is the emulator still open?)")
-        src_json = os.path.join(self.folder, "sources.json")
-        try:
-            if keep:
-                with open(src_json, "w", encoding="utf-8") as f:
-                    json.dump(keep, f)
-            elif os.path.lexists(src_json):
-                os.remove(src_json)
-        except OSError as e:
-            self.note(f"error couldn't update {src_json}: {e}")
+                proc.wait(20)
+                return True
+            except subprocess.TimeoutExpired:
+                if self.lines == seen:
+                    return False                # nothing for 20 s: it isn't saving, it's stuck
+        return False
 
 
 # -- emulator ------------------------------------------------------------------------
@@ -584,13 +393,12 @@ def find_retroarch() -> Optional[Tuple[List[str], str]]:
     return None
 
 
-def emulator_command(cfg: Config, where: str) -> Union[List[str], str, None]:
+def emulator_command(cfg: Config) -> Union[List[str], str, None]:
     """What to run: the user's own command with the files filled in (a string on Windows, where
     the system parses command lines itself), RetroArch's command, or None if nothing is known."""
-    play = cmd_path(where, "play.cmd")
-    ext = EXT[cfg.format]
-    fd1 = cmd_path(where, "FD1" + ext)
-    fd2 = cmd_path(where, "FD2" + ext)
+    play = cmd_path(cfg.mountpoint, "play.cmd")
+    fd1 = cmd_path(cfg.mountpoint, "FD1" + EXT[cfg.format])
+    fd2 = cmd_path(cfg.mountpoint, "FD2" + EXT[cfg.format])
     custom = cfg.emulator_command.strip()
     if custom:
         filled = custom.replace("{play}", play).replace("{fd1}", fd1).replace("{fd2}", fd2)
@@ -605,16 +413,15 @@ def emulator_command(cfg: Config, where: str) -> Union[List[str], str, None]:
     return prefix + ["-L", core, play]
 
 
-def launch_emulator(cfg: Config, where: str) -> str:
+def launch_emulator(cfg: Config) -> str:
     try:
-        cmd = emulator_command(cfg, where)
+        cmd = emulator_command(cfg)
     except ValueError as e:
         return f"the emulator command can't be read: {e}"
     if cmd is None:
         return "RetroArch with the Neko Project II kai core was not found; open the two files in your emulator"
     try:
-        run_external(cmd) if isinstance(cmd, list) else subprocess.Popen(
-            cmd, env=external_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run_external(cmd)
     except OSError as e:
         return f"couldn't start the emulator: {e}"
     return "emulator started"
@@ -624,33 +431,19 @@ def launch_emulator(cfg: Config, where: str) -> str:
 class Station:
     def __init__(self) -> None:
         self.cfg = Config.load()
-        self.bridge = Bridge()
-        self.files: Optional[ImagePlay] = None
+        self.events: Deque[str] = collections.deque(maxlen=60)
+        self.bridge = Bridge(self.note)
         self.token = secrets.token_urlsafe(16)
-        self.driver_ok = False
-        self.driver_msg = "checking"
-        self.driver_checked = False
+        self.driver_ok, self.driver_msg = driver_check()
         self.probe: Dict[str, Dict[str, Any]] = {}
         self.probe_error = ""
+        self.probing = False
         self.message = ""
         self.last_seen = 0.0           # when the page last asked for the state
         self.seen_once = False
         self.page_gone = 0.0           # when the page said goodbye (window closed)
         self.job: Dict[str, Any] = {}  # the backup in progress, or the last one
-        self.events: Deque[str] = collections.deque(maxlen=60)
-        self.tray = False
-        self.probing = False
         self.lock = threading.RLock()  # one action at a time
-        threading.Thread(target=self.check_driver, daemon=True).start()
-        # L6: copies left by a run that never reached Stop go back first, whatever the mode
-        try:
-            ImagePlay(self.cfg, self.note).recover()
-        except OSError as e:
-            self.note(f"error {e}")
-
-    def check_driver(self) -> None:
-        self.driver_ok, self.driver_msg = driver_check()
-        self.driver_checked = True
 
     def note(self, msg: str) -> None:
         self.events.append(time.strftime("%H:%M:%S ") + msg)
@@ -665,7 +458,7 @@ class Station:
 
     @property
     def running(self) -> bool:
-        return self.bridge.running or self.files is not None
+        return self.bridge.running
 
     @property
     def backing_up(self) -> bool:
@@ -673,16 +466,8 @@ class Station:
 
     @property
     def busy(self) -> bool:
-        """Something owns the board: the bridge, image play, a backup, or a probe."""
+        """Something owns the board: the bridge, a backup, or a probe."""
         return self.running or self.backing_up or self.probing
-
-    @property
-    def ready(self) -> bool:
-        return self.files is not None or self.bridge.ready
-
-    @property
-    def where(self) -> str:
-        return files_folder() if self.files is not None else self.cfg.mountpoint
 
     def refresh_probe(self) -> None:
         with self.lock:                        # a probe owns the board; nothing starts meanwhile
@@ -701,24 +486,23 @@ class Station:
     def state(self) -> Dict[str, Any]:
         self.last_seen = time.monotonic()
         self.seen_once = True
-        if self.message == "starting" and self.ready:
+        if self.message == "starting" and self.bridge.ready:
             self.message = "running"
         cfg = self.cfg
         ext = EXT[cfg.format]
         board = None if self.busy else board_port()
-        where = self.where
         drives: Dict[str, Any] = {}
         for name in SLOTS:
             letter = cfg.letter(name)
             image = cfg.images.get(name, "")
             info: Dict[str, Any] = {"drive": letter, "side": "left" if name == "FD1" else "right",
-                                    "file": cmd_path(where, name + ext),
+                                    "file": cmd_path(cfg.mountpoint, name + ext),
                                     "image": image, "image_name": os.path.basename(image) if image else ""}
             if image:
                 present = os.path.isfile(image)
-                info.update({"disk": present, "protected": present and not writable(image),
+                info.update({"disk": present, "protected": present and not os.access(image, os.W_OK),
                              "label": disk_label(image) if present else ""})
-            elif self.bridge.running:
+            elif self.running:
                 info.update(self.bridge.slots.get(name, {}))
                 if self.bridge.ready and info.get("disk"):
                     info["label"] = disk_label(str(info["file"]))
@@ -727,20 +511,17 @@ class Station:
             drives[name] = info
         emu = find_retroarch()
         return {
-            "app": APP_NAME, "version": VERSION, "system": SYSTEM, "tray": self.tray,
+            "app": APP_NAME, "version": VERSION, "system": SYSTEM,
             "board": {"present": self.busy or board is not None, "port": board},
-            "driver": {"ok": self.driver_ok, "checked": self.driver_checked, "needed": not self.all_images,
-                       "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},
-            "running": self.running, "busy": self.busy, "ready": self.ready,
-            "error": self.bridge.error if self.files is None else "",
-            "identified": cfg.left in ("A", "B"),
-            "mountpoint": where, "play": cmd_path(where, "play.cmd"),
+            "driver": {"ok": self.driver_ok, "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},
+            "running": self.running, "busy": self.busy, "ready": self.bridge.ready, "error": self.bridge.error,
+            "identified": cfg.left in ("A", "B"), "all_images": self.all_images,
+            "mountpoint": cfg.mountpoint, "play": cmd_path(cfg.mountpoint, "play.cmd"),
             "drives": drives, "probe_error": self.probe_error,
             "library": {"folder": self.library, "images": list_library(self.library, ext)},
             "emulator": {"found": emu is not None, "custom": bool(cfg.emulator_command.strip()),
                          "name": "RetroArch, Neko Project II kai core" if emu else ""},
-            "log": sorted(list(self.bridge.log) + list(self.events))[-60:], "message": self.message,
-            "job": self.job,
+            "log": list(self.events), "message": self.message, "job": self.job,
             "config": asdict(cfg),
         }
 
@@ -751,101 +532,78 @@ class Station:
                 return "already running"
             if self.backing_up:
                 return "wait for the backup to finish"
+            if not self.driver_ok:
+                return driver_hint()
             for name in SLOTS:
                 img = self.cfg.images.get(name)
                 if img and not os.path.isfile(img):
                     return f"{name}: the image {os.path.basename(img)} is missing"
+            if not self.all_images:
+                if not self.cfg.left:
+                    return "identify the left drive first"
+                if not board_port(0):
+                    return "the Greaseweazle isn't connected"
             self.events.clear()
-            if self.all_images:
-                play = ImagePlay(self.cfg, self.note)
-                msg = play.start()
-                if msg == "starting":
-                    self.files = play
-                return msg
-            if not self.cfg.left:
-                return "identify the left drive first"
-            if not self.driver_checked:
-                return "still checking for the disk driver; try again in a moment"
-            if not self.driver_ok:
-                return driver_hint()
-            if not board_port(0):
-                return "the Greaseweazle isn't connected"
             self.probe = {}
             return self.bridge.start(self.cfg)
 
     def stop(self) -> str:
         with self.lock:
-            if self.files is not None:
-                msg = self.files.stop()
-                self.files = None
-            else:
-                msg = self.bridge.stop(self.cfg.mountpoint)
+            msg = self.bridge.stop(self.cfg.mountpoint)
         self.refresh_probe()
         return msg
 
-    def identify(self) -> Dict[str, Any]:
+    def identify(self) -> str:
         """The user has put a disk in the LEFT drive only: whichever unit holds a disk is left."""
         with self.lock:
             if self.busy:
-                return {"ok": False, "message": "stop first" if self.running else "wait for the backup to finish"}
+                return "stop first" if self.running else "wait for the backup to finish"
             try:
                 probe = probe_drives(self.cfg)
             except Exception as e:
-                return {"ok": False, "message": f"couldn't talk to the drives: {e}"}
+                return f"couldn't talk to the drives: {e}"
             self.probe = probe
             with_disk = [k for k, v in probe.items() if v["disk"]]
             if len(with_disk) != 1:
-                return {"ok": False, "message": "no disk found" if not with_disk else
-                        "both drives hold a disk; leave only the left one in"}
+                return "no disk found" if not with_disk else "both drives hold a disk; leave only the left one in"
             self.cfg.left = with_disk[0]
             self.cfg.save()
-            return {"ok": True, "message": f"the left drive is unit {self.cfg.left}; the right one is {self.cfg.right}"}
+            return f"the left drive is unit {self.cfg.left}; the right one is {self.cfg.right}"
 
     def settings(self, data: Dict[str, Any]) -> str:
-        with self.lock:
-            return self._settings(data)
-
-    def _settings(self, data: Dict[str, Any]) -> str:
         """Check everything first, then apply, then save: a refused change changes nothing."""
-        changes: Dict[str, Any] = {}
-        if "emulator_command" in data:
-            changes["emulator_command"] = str(data["emulator_command"])
-        if data.get("swap"):
-            if self.running:
-                return "stop before swapping the drives"
-            changes["left"] = self.cfg.right
-        if data.get("left") in ("A", "B"):             # for people who already know their ribbon
-            changes["left"] = str(data["left"])
-        if "format" in data:
-            if data["format"] not in EXT:
-                return "unknown disk format"
-            if self.running:
-                return "stop before changing the format"
-            changes["format"] = str(data["format"])
-        images = dict(self.cfg.images)
-        if isinstance(data.get("image"), dict):
-            if self.running:
-                return "stop before changing what a drive plays from"
-            for name, value in data["image"].items():
-                if name not in SLOTS:
-                    continue
-                value = str(value or "")
-                if value and not os.path.isabs(value):
-                    value = os.path.join(self.library, value)
-                if value and not os.path.isfile(value):
-                    return f"{os.path.basename(value)} isn't in the library"
-                if value:
-                    images[name] = value
-                else:
-                    images.pop(name, None)
-            paths = [os.path.realpath(p) for p in images.values()]
-            if len(paths) != len(set(paths)):
-                return "both drives can't play from the same image"
-        for key, value in changes.items():
-            setattr(self.cfg, key, value)
-        self.cfg.images = images
-        self.cfg.save()
-        return "saved"
+        with self.lock:
+            changes: Dict[str, Any] = {}
+            if "emulator_command" in data:
+                changes["emulator_command"] = str(data["emulator_command"])
+            if data.get("swap"):
+                if self.running:
+                    return "stop before swapping the drives"
+                changes["left"] = self.cfg.right
+            images = dict(self.cfg.images)
+            if isinstance(data.get("image"), dict):
+                if self.running:
+                    return "stop before changing what a drive plays from"
+                for name, value in data["image"].items():
+                    if name not in SLOTS:
+                        continue
+                    value = str(value or "")
+                    if value and not os.path.isabs(value):
+                        value = os.path.join(self.library, value)
+                    if value and not os.path.isfile(value):
+                        return f"{os.path.basename(value)} isn't in the library"
+                    if value:
+                        images[name] = value
+                    else:
+                        images.pop(name, None)
+                paths = [os.path.realpath(p) for p in images.values()]
+                if len(paths) != len(set(paths)):
+                    return "both drives can't play from the same image"
+            for key, value in changes.items():
+                setattr(self.cfg, key, value)
+            self.cfg.images = images
+            self.cfg.save()
+            return "saved"
 
     def backup(self, name: str) -> str:
         """Read the whole disk in FD1 or FD2 into an image file, once, track by track."""
@@ -870,40 +628,32 @@ class Station:
         job = self.job
         ext = EXT[self.cfg.format]
         try:
-            board = GwBoard(None)
-            try:
-                be = GwBackend(letter, self.cfg.format, board=board, cyl_offset=self.cfg.offsets.get(letter, 0))
+            with GwBoard() as board, GwBackend(letter, self.cfg.format, board, self.cfg.offsets.get(letter, 0)) as be:
                 be.READ_ATTEMPTS = 2            # an original gets few passes; the image shows what was weak
-                try:
-                    if not be.has_disk():
-                        raise RuntimeError("no disk in the drive")
-                    total = be.cyls * be.heads
-                    job["total"] = total
-                    chunks: List[bytes] = []
-                    label = ""
-                    for cyl in range(be.cyls):
-                        for head in range(be.heads):
-                            data = be.read_track(cyl, head)
-                            if data is None:
-                                if be.disk_changed():
-                                    raise RuntimeError("the disk was changed during the backup; nothing saved")
-                                job["bad"].append(f"{cyl}.{head}")
-                                data = b"\0" * be.track_bytes
-                            if cyl == 0 and head == 0:
-                                label = label_of(data)
-                            chunks.append(data)
-                            job["track"] = cyl * be.heads + head + 1
-                    if be.disk_changed():
-                        raise RuntimeError("the disk was changed during the backup; nothing saved")
-                    bad = len(job["bad"])
-                    stem = (label or "disk") + (f" ({bad} unreadable tracks)" if bad else "")
-                    path = store_image(self.library, b"".join(chunks), stem, ext)
-                    job["file"] = path
-                    self.note(f"{name}: saved {os.path.basename(path)}" + (f", {bad} track(s) unreadable" if bad else ""))
-                finally:
-                    be.close()
-            finally:
-                board.close()
+                if not be.has_disk():
+                    raise RuntimeError("no disk in the drive")
+                job["total"] = be.cyls * be.heads
+                chunks: List[bytes] = []
+                label = ""
+                for cyl in range(be.cyls):
+                    for head in range(be.heads):
+                        data = be.read_track(cyl, head)
+                        if data is None:
+                            if be.disk_changed():
+                                raise RuntimeError("the disk was changed during the backup; nothing saved")
+                            job["bad"].append(f"{cyl}.{head}")
+                            data = b"\0" * be.track_bytes
+                        if cyl == 0 and head == 0:
+                            label = label_of(data)
+                        chunks.append(data)
+                        job["track"] = cyl * be.heads + head + 1
+                if be.disk_changed():
+                    raise RuntimeError("the disk was changed during the backup; nothing saved")
+                bad = len(job["bad"])
+                stem = (label or "disk") + (f" ({bad} unreadable tracks)" if bad else "")
+                path = store_image(self.library, b"".join(chunks), stem, ext)
+                job["file"] = path
+                self.note(f"{name}: saved {os.path.basename(path)}" + (f", {bad} track(s) unreadable" if bad else ""))
         except Exception as e:
             job["error"] = str(e)
             self.note(f"{name}: backup failed: {e}")
@@ -1011,28 +761,22 @@ def make_handler(st: Station, port: int) -> type:
                     st.page_gone = time.monotonic()
                     self._json({"message": "bye"})
                     return
-                if path == "/api/start":
-                    st.message = st.start()
-                elif path == "/api/stop":
-                    st.message = st.stop()
-                elif path == "/api/identify":
-                    self._json(st.identify())
-                    return
-                elif path == "/api/probe":
+                actions: Dict[str, Callable[[], str]] = {
+                    "/api/start": st.start,
+                    "/api/stop": st.stop,
+                    "/api/identify": st.identify,
+                    "/api/launch": lambda: launch_emulator(st.cfg),
+                    "/api/backup": lambda: st.backup(str(data.get("name", ""))),
+                    "/api/settings": lambda: st.settings(data),
+                }
+                if path == "/api/probe":
                     if st.busy:
                         st.message = "busy"
                     else:
                         st.refresh_probe()
                         st.message = st.probe_error or "drives checked"
-                elif path == "/api/launch":
-                    st.message = launch_emulator(st.cfg, st.where)
-                elif path == "/api/backup":
-                    st.message = st.backup(str(data.get("name", "")))
-                elif path == "/api/settings":
-                    st.message = st.settings(data)
-                elif path == "/api/driver":
-                    st.check_driver()
-                    st.message = "driver found" if st.driver_ok else driver_hint()
+                elif path in actions:
+                    st.message = actions[path]()
                 else:
                     self.send_error(404)
                     return
@@ -1045,41 +789,17 @@ def make_handler(st: Station, port: int) -> type:
     return Handler
 
 
-def free_port(preferred: int) -> int:
-    for port in (preferred, 0):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return int(s.getsockname()[1])
-            except OSError:
-                continue
-    return preferred
-
-
-def port_file() -> str:
-    return os.path.join(config_dir(), "port")
-
-
 # -- the window -----------------------------------------------------------------------
 def existing_instance() -> Optional[str]:
     """The address of a Floppy Station already running on this machine, if any."""
     import urllib.request
-    ports = [PORT]
+    url = f"http://127.0.0.1:{PORT}/"
     try:
-        with open(port_file(), encoding="utf-8") as f:
-            ports.insert(0, int(f.read().strip()))
-    except (OSError, ValueError):
-        pass
-    for port in ports:
-        url = f"http://127.0.0.1:{port}/"
-        try:
-            with urllib.request.urlopen(url + "api/ping", timeout=2) as r:
-                data = json.loads(r.read())
-            if data.get("app") == APP_NAME:
-                return url
-        except Exception:
-            continue
-    return None
+        with urllib.request.urlopen(url + "api/ping", timeout=2) as r:
+            data = json.loads(r.read())
+        return url if data.get("app") == APP_NAME else None
+    except Exception:
+        return None
 
 
 def app_mode_browser() -> Optional[List[str]]:
@@ -1120,8 +840,8 @@ def linux_desktop_entry() -> None:
     KDE, a window rule matching the window's title give it its own entry. Idempotent."""
     if SYSTEM != "Linux":
         return
+    home = os.path.expanduser("~")
     try:
-        home = os.path.expanduser("~")
         apps = os.path.join(home, ".local/share/applications")
         icons = os.path.join(home, ".local/share/icons/hicolor/256x256/apps")
         os.makedirs(apps, exist_ok=True)
@@ -1135,191 +855,82 @@ def linux_desktop_entry() -> None:
                     "Comment=Play PC-98 games from the real floppy drives\n"
                     f"Exec={exe}\nIcon=pc98-floppy-station\nTerminal=false\nCategories=Game;Emulator;\n"
                     "StartupWMClass=pc98-floppy-station\n")
-        if "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", ""):
-            import configparser
-            path = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), "kwinrulesrc")
-            c = configparser.RawConfigParser()
-            c.optionxform = str  # type: ignore[assignment]
-            c.read(path)
-            key = "pc98-floppy-station"
-            if not c.has_section(key):
-                if not c.has_section("General"):
-                    c.add_section("General")
-                rules = [r for r in c.get("General", "rules", fallback="").split(",") if r] + [key]
-                c.set("General", "rules", ",".join(rules))
-                c.set("General", "count", str(len(rules)))
-                c.add_section(key)
-                for k, v in (("Description", "PC-98 Floppy Station window"), ("title", APP_NAME),
-                             ("titlematch", "1"), ("desktopfile", key), ("desktopfilerule", "2")):
-                    c.set(key, k, v)
-                with open(path, "w", encoding="utf-8") as f:
-                    c.write(f, space_around_delimiters=False)
-                subprocess.run(["qdbus", "org.kde.KWin", "/KWin", "reconfigure"], check=False, env=external_env(),
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     except Exception as e:
         log.info("desktop entry not installed: %s", e)
-
-
-def open_window(url: str) -> str:
-    """Show the page. Best: the system's own web engine in a window of ours (pywebview).
-    Next: a Chromium-family browser in app mode, which is a bare window. Last: a browser tab.
-    Returns which one happened; "webview" means the caller must run webview.start() itself."""
+    if "KDE" not in os.environ.get("XDG_CURRENT_DESKTOP", ""):
+        return
     try:
-        import webview  # noqa: F401
-        if SYSTEM != "Linux" or _gtk_webkit_available():
-            return "webview"
-    except Exception:
-        pass
+        import configparser
+        path = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), "kwinrulesrc")
+        c = configparser.RawConfigParser()
+        c.optionxform = str  # type: ignore[assignment]
+        c.read(path, encoding="utf-8")
+        key = "pc98-floppy-station"
+        if c.has_section(key):
+            return
+        if not c.has_section("General"):
+            c.add_section("General")
+        rules = [r for r in c.get("General", "rules", fallback="").split(",") if r] + [key]
+        c.set("General", "rules", ",".join(rules))
+        c.set("General", "count", str(len(rules)))
+        c.add_section(key)
+        for k, v in (("Description", "PC-98 Floppy Station window"), ("title", APP_NAME),
+                     ("titlematch", "1"), ("desktopfile", key), ("desktopfilerule", "2")):
+            c.set(key, k, v)
+        with open(path, "w", encoding="utf-8") as f:
+            c.write(f, space_around_delimiters=False)
+        for tool in ("qdbus6", "qdbus-qt6", "qdbus"):
+            if shutil.which(tool):
+                subprocess.run([tool, "org.kde.KWin", "/KWin", "reconfigure"], check=False, env=external_env(),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                break
+    except Exception as e:
+        log.info("window rule not installed: %s", e)
+
+
+def open_window(url: str) -> None:
+    """A bare browser window where a Chromium-family browser exists, otherwise a browser tab."""
     cmd = app_mode_browser()
     if cmd:
         linux_desktop_entry()
         try:
             run_external(cmd + [f"--app={url}", "--window-size=1040,980"])
-            return "app"
+            return
         except OSError:
             pass
     open_in_browser(url)
-    return "browser"
 
 
-def _gtk_webkit_available() -> bool:
-    try:
-        import gi
-        gi.require_version("Gtk", "3.0")
-        gi.require_version("WebKit2", "4.1")
-        from gi.repository import Gtk, WebKit2  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-
-def make_tray(st: Station, on_open: Callable[[], None], on_quit: Callable[[], None]) -> Optional[Any]:
-    """A tray icon with Open / Start or Stop / Play / Quit, where the desktop can show one.
-    Windows and desktops with an app-indicator service can; a Wayland desktop without that
-    service, such as the Steam Deck's, cannot, and macOS is left to its window for now."""
-    if SYSTEM == "Darwin":
-        return None
-    try:
-        import pystray
-        from PIL import Image
-    except Exception:
-        return None
-    if pystray.Icon.__module__.endswith("_xorg"):          # legacy tray: modern desktops ignore it
-        return None
-    try:
-        image = Image.open(os.path.join(HERE, "icon.png"))
-    except OSError:
-        return None
-
-    def toggle(icon: Any, item: Any) -> None:
-        # off the tray's own thread: a stop can take a while when a save is in progress
-        def go() -> None:
-            st.message = st.stop() if st.running else st.start()
-        threading.Thread(target=go, daemon=True).start()
-
-    def play(icon: Any, item: Any) -> None:
-        st.message = launch_emulator(st.cfg, st.where)
-
-    menu = pystray.Menu(
-        pystray.MenuItem("Open", lambda icon, item: on_open(), default=True),
-        pystray.MenuItem(lambda item: "Stop" if st.running else "Start", toggle),
-        pystray.MenuItem("Play", play, enabled=lambda item: st.ready),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quit", lambda icon, item: on_quit()),
-    )
-    icon = pystray.Icon("pc98-floppy-station", image, APP_NAME, menu)
-    threading.Thread(target=icon.run, daemon=True).start()
-
-    def keep_menu_current() -> None:          # the menu text is built once; refresh it as state moves
-        last = (st.running, st.ready)
-        while True:
-            time.sleep(2)
-            now = (st.running, st.ready)
-            if now != last:
-                last = now
-                try:
-                    icon.update_menu()
-                except Exception:
-                    pass
-    threading.Thread(target=keep_menu_current, daemon=True).start()
-    st.tray = True
-    return icon
-
-
-def serve(show: str) -> int:
-    """show: 'window' opens the page in a window, 'none' only serves (prints the address)."""
+def serve(show_window: bool) -> int:
     st = Station()
     threading.Thread(target=st.refresh_probe, daemon=True).start()
-    port = free_port(PORT)
-    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(st, port))
-    url = f"http://127.0.0.1:{port}/"
     try:
-        os.makedirs(config_dir(), exist_ok=True)
-        with open(port_file(), "w", encoding="utf-8") as f:
-            f.write(str(port))
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), make_handler(st, PORT))
     except OSError:
-        pass
+        running = existing_instance()
+        if running and show_window:            # one program, one window: just show it again
+            open_window(running)
+            return 0
+        print(f"{APP_NAME}: port {PORT} is in use" + (" by another copy of this program" if running else ""))
+        return 1
+    url = f"http://127.0.0.1:{PORT}/"
     print(f"{APP_NAME}: {url}", flush=True)
     log.info("serving %s", url)
-    quitting = threading.Event()
-
-    def finish() -> None:
-        if st.running:
-            st.stop()
-        try:
-            os.remove(port_file())
-        except OSError:
-            pass
-
-    mode = open_window(url) if show == "window" else "none"
-    if mode == "webview":
-        import webview
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        window = webview.create_window(APP_NAME, url, width=1040, height=980, background_color="#1414b4")
-        assert window is not None
-
-        def quit_webview() -> None:
-            quitting.set()
-            window.destroy()
-
-        def hide_instead_of_close() -> bool:
-            # With a tray, closing the window only hides it; Quit in the tray ends the program.
-            if quitting.is_set():
-                return True
-            window.hide()
-            return False
-
-        tray = make_tray(st, window.show, quit_webview)
-        if tray:
-            window.events.closing += hide_instead_of_close
-        webview.start()                       # returns when the window is destroyed
-        if tray:
-            tray.stop()
-        finish()
-        httpd.shutdown()
-        return 0
-
-    def reopen() -> None:
+    if show_window:
         open_window(url)
 
-    def quit_server() -> None:
-        quitting.set()
-        threading.Thread(target=httpd.shutdown, daemon=True).start()
-
-    tray = make_tray(st, reopen, quit_server) if mode != "none" else None
-
     def watch_page() -> None:
-        # The page asks for the state every second and says goodbye when it closes. Without a
-        # tray there is nothing left to show the program, so closing the window ends it: the
-        # drives are stopped, with anything pending written first. A reload also says goodbye
-        # but polls again within the 3 s, so it doesn't count. If the page just falls silent
-        # (a browser slows a hidden tab right down) the program ends only when nothing runs.
-        while not tray:
+        # The page asks for the state every second and says goodbye as it closes; a reload
+        # also says goodbye but polls again at once, so goodbye counts only after a short
+        # grace, longer while the drives are in use. A page that just falls silent (a browser
+        # slows a hidden tab right down) ends the program only when nothing is running.
+        while True:
             time.sleep(0.5)
             now = time.monotonic()
-            said_bye = st.page_gone and now - st.page_gone > 1.2 and st.last_seen < st.page_gone
+            grace = 3.0 if st.running else 1.2
+            said_bye = st.page_gone and now - st.page_gone > grace and st.last_seen < st.page_gone
             quiet = st.seen_once and now - st.last_seen > 150 and not st.busy
-            if said_bye or quiet:
+            if (said_bye or quiet) and not st.backing_up:
                 httpd.shutdown()
                 return
     threading.Thread(target=watch_page, daemon=True).start()
@@ -1328,9 +939,8 @@ def serve(show: str) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        if tray:
-            tray.stop()
-        finish()
+        if st.running:
+            st.stop()                          # writes anything pending first
     return 0
 
 
@@ -1347,41 +957,17 @@ def setup_logging() -> None:
         log.error("uncaught: %s", "".join(traceback.format_exception(exc_type, exc, tb)))
     sys.excepthook = hook
 
-    def thread_hook(args: Any) -> None:
-        log.error("uncaught in thread %s: %s", args.thread.name if args.thread else "?",
-                  "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
-    threading.excepthook = thread_hook
-
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if args[:1] in (["--bridge"], ["--check-driver"]):
-        # the parent reads these as UTF-8 whatever the system code page says
-        for stream in (sys.stdout, sys.stderr):
+    if args[:1] == ["--bridge"]:
+        for stream in (sys.stdout, sys.stderr):   # the parent reads UTF-8 whatever the system code page
             if stream is not None and hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding="utf-8", errors="replace")
-    if args[:1] == ["--bridge"]:
         import floppy_bridge                  # needs the FUSE driver; the window itself doesn't
         return floppy_bridge.main(args[1:])
-    if args[:1] == ["--check-driver"]:
-        try:
-            import mfusepy  # noqa: F401
-        except Exception as e:
-            print(str(e))
-            return 1
-        print("ok")
-        return 0
     setup_logging()
-    if "--no-browser" in args:
-        return serve("none")
-    running = existing_instance()
-    if running:                               # one program, one window: just show it again
-        if open_window(running) == "webview":
-            import webview
-            webview.create_window(APP_NAME, running, width=1040, height=980, background_color="#1414b4")
-            webview.start()
-        return 0
-    return serve("window")
+    return serve(show_window="--no-browser" not in args)
 
 
 if __name__ == "__main__":

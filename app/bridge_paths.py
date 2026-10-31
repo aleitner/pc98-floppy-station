@@ -19,3 +19,14 @@ def cmd_path(mountpoint: str, name: str) -> str:
     if SYSTEM == "Windows":
         return f"{mountpoint}\\{name}"
     return os.path.join(mountpoint, name)
+
+
+def unmount(mountpoint: str) -> None:
+    """Ask the system to unmount a bridge folder (used when the bridge can't be told to stop)."""
+    import shutil
+    import subprocess
+    if SYSTEM == "Windows":
+        return                                 # WinFsp drops the volume when the process ends
+    tool = shutil.which("fusermount3") or shutil.which("fusermount")
+    cmd = [tool, "-u", mountpoint] if tool else ["umount", mountpoint]
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
