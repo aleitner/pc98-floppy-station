@@ -1,6 +1,7 @@
 """Names and places shared by the bridge and its window. Imports nothing that needs a driver."""
 from __future__ import annotations
 
+import errno
 import os
 import platform
 
@@ -19,6 +20,25 @@ def cmd_path(mountpoint: str, name: str) -> str:
     if SYSTEM == "Windows":
         return f"{mountpoint}\\{name}"
     return os.path.join(mountpoint, name)
+
+
+def plain_words(e: BaseException) -> str:
+    """A board or drive failure in plain words. The libraries raise system errors as they
+    come: a bare errno tuple, a serial exception."""
+    text = str(e)
+    code = getattr(e, "errno", None)
+    if code is None and len(e.args) == 2 and isinstance(e.args[0], int):
+        code = e.args[0]                      # termios.error carries (errno, text)
+    if "Cannot find" in text or "could not open port" in text or code == errno.ENOENT:
+        return "the Greaseweazle isn't connected"
+    if code in (errno.EBUSY, errno.EAGAIN) or "busy" in text.lower() or "in use" in text.lower():
+        return "the Greaseweazle is in use by another program (gw, or another copy of this one)"
+    if code == errno.EACCES or "Permission denied" in text:
+        return "no permission to use the Greaseweazle's port" + \
+            ("; add yourself to the dialout (or uucp) group and log in again" if SYSTEM == "Linux" else "")
+    if code in (errno.EINVAL, errno.ENODEV, errno.EIO, errno.ENXIO):
+        return "the Greaseweazle didn't answer; unplug it, plug it in again and try once more"
+    return f"couldn't talk to the drives: {text or type(e).__name__}"
 
 
 def unmount(mountpoint: str) -> None:

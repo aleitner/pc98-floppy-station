@@ -26,13 +26,14 @@ import os
 import stat
 import sys
 import threading
+import traceback
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 import mfusepy
 
-from bridge_paths import EXT, GEOMETRY, SYSTEM, cmd_path, default_mountpoint, unmount
+from bridge_paths import EXT, GEOMETRY, SYSTEM, cmd_path, default_mountpoint, plain_words, unmount
 from floppy_drive import Backend, DiskError, GwBackend, GwBoard, ImageBackend, TrackDisk
 
 QUIET_SECONDS = 1.0       # the game has stopped writing: put it on the disk
@@ -333,7 +334,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             status(f"{name}{ext} is {where} ({state})")
             status(slot_line(slot))
     except Exception as e:
-        status(f"error can't open the drives: {e}")
+        traceback.print_exc(file=sys.stdout)    # the window keeps these lines in its log file
+        status(f"error can't open the drives: {plain_words(e)}")
         return 2
 
     names = " ".join(cmd_path(mountpoint, p[1:]) for p in slots)

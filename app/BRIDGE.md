@@ -20,9 +20,13 @@ A filesystem layer and Python with a few packages.
 | Windows | install [WinFsp](https://winfsp.dev/rel/) | Microsoft C++ Build Tools |
 | macOS | install [FUSE-T](https://www.fuse-t.org/), or macFUSE (Apple Silicon needs a reduced-security boot for macFUSE) | `xcode-select --install` |
 
+    python3 -m pip install git+https://github.com/pyserial/pyserial@70d188643b031d10d2a2b9ea880bd56789fdb1f6
     python3 -m pip install mfusepy git+https://github.com/keirf/greaseweazle@latest
 
-The Greaseweazle package contains C code, so that step needs a compiler unless a build for
+The first line matters on a system with glibc 2.42 or newer (SteamOS, Arch, Fedora 43…): the
+released pyserial 3.5 can't set the control baud rates the board listens for there, and every
+attempt to open the drives ends in "(22, 'Invalid argument')". The Greaseweazle package
+contains C code, so the second step needs a compiler unless a build for
 your Python version is already available. SteamOS has no compiler: build wheels in a
 `python:3.14` podman container into `~/gw-wheel/py314` and install from there. Redo this
 whenever a system update changes the Python version.

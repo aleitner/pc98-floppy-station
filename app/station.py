@@ -15,7 +15,6 @@ window down. Settings and a log live in the user's config folder.
 from __future__ import annotations
 
 import collections
-import errno
 import glob
 import http.server
 import json
@@ -35,7 +34,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
-from bridge_paths import EXT, cmd_path, default_mountpoint, unmount
+from bridge_paths import EXT, cmd_path, default_mountpoint, plain_words, unmount
 
 SYSTEM = platform.system()
 PORT = int(os.environ.get("PC98_STATION_PORT") or 9801)   # overridable so a test can run beside the real thing
@@ -249,23 +248,9 @@ def driver_hint() -> str:
 
 
 def explain(e: BaseException) -> str:
-    """A drive or board failure in plain words. The library raises system errors as they
-    come (a bare errno, a serial exception); the full detail goes to the log."""
+    """A board or drive failure in plain words; the full detail goes to the log."""
     log.error("drives: %s", "".join(traceback.format_exception(e)).rstrip())
-    text = str(e)
-    code = getattr(e, "errno", None)
-    if code is None and len(e.args) == 2 and isinstance(e.args[0], int):
-        code = e.args[0]                      # termios.error carries (errno, text)
-    if "Cannot find" in text or "could not open port" in text or code == errno.ENOENT:
-        return "the Greaseweazle isn't connected"
-    if code in (errno.EBUSY, errno.EAGAIN) or "busy" in text.lower() or "in use" in text.lower():
-        return "the Greaseweazle is in use by another program (gw, or another copy of this one)"
-    if code == errno.EACCES or "Permission denied" in text:
-        return "no permission to use the Greaseweazle's port" + \
-            ("; add yourself to the dialout (or uucp) group and log in again" if SYSTEM == "Linux" else "")
-    if code in (errno.EINVAL, errno.ENODEV, errno.EIO, errno.ENXIO):
-        return "the Greaseweazle didn't answer; unplug it, plug it in again and try once more"
-    return f"couldn't talk to the drives: {text or type(e).__name__}"
+    return plain_words(e)
 
 
 def probe_drives(cfg: Config) -> Dict[str, Dict[str, Any]]:
@@ -507,8 +492,11 @@ class Station:
     def state(self) -> Dict[str, Any]:
         self.last_seen = time.monotonic()
         self.seen_once = True
-        if self.message == "starting" and self.bridge.ready:
-            self.message = "running"
+        if self.message == "starting":
+            if self.bridge.ready:
+                self.message = "running"
+            elif not self.running and self.bridge.error:
+                self.message = ""             # the bridge box shows what went wrong
         cfg = self.cfg
         ext = EXT[cfg.format]
         board = None if self.busy else board_port()
