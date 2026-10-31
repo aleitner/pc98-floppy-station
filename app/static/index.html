@@ -146,7 +146,7 @@ a { color: var(--cyan); }
 
     var html = '<span class="name">' + name + '</span><span class="side">' + d.side.toUpperCase() + ' drive</span>' +
       '<span class="state">' + state + '</span>' +
-      '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>' +
+      '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code></span>' +
       (d.image
         ? '<span class="path"><button type="button" class="small" data-usedrive="' + name + '"' + (S.busy ? ' disabled' : '') + '>Use the drive</button><span class="job">playing from ' + esc(d.image_name) + '</span></span>'
         : '<span class="path"><button type="button" class="small" data-backup="' + name + '"' + (canBackup(d) ? '' : ' disabled') + '>Back up this disk</button>' + imageSelect(name) + '<span class="job">' + jobText(name) + '</span></span>');
@@ -215,10 +215,6 @@ a { color: var(--cyan); }
   document.addEventListener("click", function (e) {
     var t = e.target.closest("button"); if (!t || !S) return;
     if (t.dataset.post) { $("msg").textContent = ""; post(t.dataset.post); }
-    else if (t.dataset.copy) {
-      if (!navigator.clipboard) { $("msg").textContent = "copying isn't available here; select the text instead"; return; }
-      navigator.clipboard.writeText(t.dataset.copy).then(function () { $("msg").textContent = "copied"; }, function () { $("msg").textContent = "copying isn't allowed here; select the text instead"; });
-    }
     else if (t.id === "startstop") { $("msg").textContent = S.running ? "stopping" : "starting"; post(S.running ? "/api/stop" : "/api/start"); }
     else if (t.dataset.usedrive) { var im = {}; im[t.dataset.usedrive] = ""; post("/api/settings", { image: im }); }
     else if (t.id === "play") { post("/api/launch"); }
