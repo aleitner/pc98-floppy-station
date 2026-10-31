@@ -99,6 +99,14 @@ class GwBoard:
     def __init__(self) -> None:
         from greaseweazle.tools import util
         self.usb = util.usb_open(None)
+        try:                                  # two programs on one board would garble each other's commands
+            import fcntl
+            fcntl.flock(self.usb.ser.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ImportError:                   # Windows: a COM port can be opened only once anyway
+            pass
+        except OSError:
+            self.usb.ser.close()
+            raise
         self.lock = threading.RLock()
         self.selected: Optional["GwBackend"] = None
 

@@ -62,7 +62,7 @@ def main() -> int:
     cfgdir = os.path.join(d, "cfg", "pc98-floppy-station")
     os.makedirs(cfgdir)
     json.dump({"mountpoint": m, "library": lib}, open(os.path.join(cfgdir, "settings.json"), "w"))
-    env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(d, "cfg"), HOME=d)
+    env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(d, "cfg"), HOME=d, PC98_STATION_PORT="9811")
     log = open(os.path.join(d, "log"), "w+")
     p = subprocess.Popen([sys.executable, os.path.join(HERE, "station.py"), "--no-browser"],
                          stdout=log, stderr=subprocess.STDOUT, env=env)

@@ -15,6 +15,7 @@ window down. Settings and a log live in the user's config folder.
 from __future__ import annotations
 
 import collections
+import errno
 import glob
 import http.server
 import json
@@ -37,7 +38,7 @@ from urllib.parse import urlparse
 from bridge_paths import EXT, cmd_path, default_mountpoint, unmount
 
 SYSTEM = platform.system()
-PORT = 9801
+PORT = int(os.environ.get("PC98_STATION_PORT") or 9801)   # overridable so a test can run beside the real thing
 APP_NAME = "PC-98 Floppy Station"
 VERSION = "0.2.0"
 FROZEN = getattr(sys, "frozen", False)
@@ -245,6 +246,26 @@ def driver_hint() -> str:
     if SYSTEM == "Darwin":
         return "Install FUSE-T from https://www.fuse-t.org/ (or macFUSE) and start this program again."
     return "Install your distribution's fuse3 package (the fusermount3 command) and start this program again."
+
+
+def explain(e: BaseException) -> str:
+    """A drive or board failure in plain words. The library raises system errors as they
+    come (a bare errno, a serial exception); the full detail goes to the log."""
+    log.error("drives: %s", "".join(traceback.format_exception(e)).rstrip())
+    text = str(e)
+    code = getattr(e, "errno", None)
+    if code is None and len(e.args) == 2 and isinstance(e.args[0], int):
+        code = e.args[0]                      # termios.error carries (errno, text)
+    if "Cannot find" in text or "could not open port" in text or code == errno.ENOENT:
+        return "the Greaseweazle isn't connected"
+    if code in (errno.EBUSY, errno.EAGAIN) or "busy" in text.lower() or "in use" in text.lower():
+        return "the Greaseweazle is in use by another program (gw, or another copy of this one)"
+    if code == errno.EACCES or "Permission denied" in text:
+        return "no permission to use the Greaseweazle's port" + \
+            ("; add yourself to the dialout (or uucp) group and log in again" if SYSTEM == "Linux" else "")
+    if code in (errno.EINVAL, errno.ENODEV, errno.EIO, errno.ENXIO):
+        return "the Greaseweazle didn't answer; unplug it, plug it in again and try once more"
+    return f"couldn't talk to the drives: {text or type(e).__name__}"
 
 
 def probe_drives(cfg: Config) -> Dict[str, Dict[str, Any]]:
@@ -479,7 +500,7 @@ class Station:
                 self.probe_error = ""
             except Exception as e:
                 self.probe = {}
-                self.probe_error = str(e)
+                self.probe_error = explain(e)
             finally:
                 self.probing = False
 
@@ -561,7 +582,7 @@ class Station:
             try:
                 probe = probe_drives(self.cfg)
             except Exception as e:
-                return f"couldn't talk to the drives: {e}"
+                return explain(e)
             self.probe = probe
             with_disk = [k for k, v in probe.items() if v["disk"]]
             if len(with_disk) != 1:
@@ -654,9 +675,12 @@ class Station:
                 path = store_image(self.library, b"".join(chunks), stem, ext)
                 job["file"] = path
                 self.note(f"{name}: saved {os.path.basename(path)}" + (f", {bad} track(s) unreadable" if bad else ""))
-        except Exception as e:
+        except RuntimeError as e:             # our own messages: no disk, disk changed
             job["error"] = str(e)
             self.note(f"{name}: backup failed: {e}")
+        except Exception as e:
+            job["error"] = explain(e)
+            self.note(f"{name}: backup failed: {job['error']}")
         job["done"] = True
         self.refresh_probe()
 
