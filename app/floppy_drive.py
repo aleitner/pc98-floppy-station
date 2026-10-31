@@ -155,17 +155,21 @@ class GwBackend:
         self._changed = False        # a swap not yet acknowledged by poll_change()
         self._new_change = False
         self._empty = False
+        self._empty_seen = 0.0
         self._pins = self._pins_supported()
 
     def _pins_supported(self) -> bool:
         """Can this firmware read input pins? Decided once, so a later read error is an error."""
+        from greaseweazle.usb import Ack, CmdError
         with self._lock:
             self._select()
             try:
                 self._usb.get_pin(34)
                 return True
-            except Exception:
-                return False
+            except CmdError as e:
+                if e.code == Ack.BadCommand:
+                    return False
+                raise
             finally:
                 self._deselect()
 
@@ -203,10 +207,14 @@ class GwBackend:
             return                       # older firmware without pin reads: no detection
         if not self._usb.get_pin(34):
             # a step clears the latch; if it reads low again there is no disk at all
+            if self._empty and time.monotonic() - self._empty_seen < 2.0:
+                return                   # known empty: don't step the head on every poll
             self._usb.seek(1, 0)
             self._usb.seek(0, 0)
+            was_empty = self._empty
             self._empty = not self._usb.get_pin(34)
-            if self._last_use:
+            self._empty_seen = time.monotonic()
+            if self._last_use and not (was_empty and self._empty):
                 self._changed = True
                 self._new_change = True
         else:
@@ -285,7 +293,7 @@ class GwBackend:
                 if dat.nr_missing() == 0:
                     self._last_use = time.monotonic()
                     return bytes(dat.get_img_track())
-                if attempt == 1:          # re-seat the head before the last tries
+                if attempt == self.READ_ATTEMPTS - 2:   # re-seat the head before the last try
                     self._usb.seek(0, 0)
                     self._usb.seek(cyl + self._cyl_offset, head)
             return None
@@ -314,7 +322,11 @@ class GwBackend:
                 flux_list.append(v)
             self._usb.seek(cyl + self._cyl_offset, head)
             verify = master.verify
-            for _ in range(self.WRITE_ATTEMPTS):
+            for attempt in range(self.WRITE_ATTEMPTS):
+                if attempt:
+                    self._check_change()
+                    if self._changed:
+                        return False
                 self._usb.write_track(flux_list=flux_list, cue_at_index=wflux.index_cued,
                                       terminate_at_index=wflux.terminate_at_index, hard_sector_ticks=0)
                 if verify is None:
@@ -430,8 +442,11 @@ class TrackDisk(io.RawIOBase):
                                         "(blank disk, dirty heads, or a drive that has lost its track 0)")
             mv = memoryview(data).cast("B")
             n = min(len(mv), max(0, self.size - self._pos))
-            done = 0
             tb = self.b.track_bytes
+            if n:
+                for idx in range(self._pos // tb, (self._pos + n - 1) // tb + 1):
+                    self._track(idx)         # read every track touched first: all or nothing
+            done = 0
             while done < n:
                 idx, off = divmod(self._pos + done, tb)
                 chunk = min(n - done, tb - off)
@@ -456,7 +471,11 @@ class TrackDisk(io.RawIOBase):
         with self._lock:
             if not self._dirty:
                 return 0
-            if self.b.disk_changed():
+            try:
+                changed = self.b.disk_changed()
+            except Exception as e:           # couldn't ask the drive: nothing written, try later
+                raise DiskError(11, f"couldn't check the drive before saving ({e})")
+            if changed:
                 self.broken = ("the disk was changed while open; unsaved changes were NOT written "
                                "to the new disk")
                 raise DiskError(5, self.broken)

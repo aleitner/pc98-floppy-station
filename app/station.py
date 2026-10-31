@@ -361,15 +361,29 @@ class Bridge:
                     if self.lines == seen:
                         break                  # nothing for 20 s: it isn't saving, it's stuck
             if SYSTEM != "Windows":
-                # an unmount from outside makes the bridge write what is pending and exit
+                # an unmount from outside makes the bridge write what is pending and exit;
+                # keep waiting while it reports progress, as above
                 tool = shutil.which("fusermount3") or shutil.which("fusermount")
                 subprocess.run([tool, "-u", mountpoint] if tool else ["umount", mountpoint], check=False)
+                while time.monotonic() < deadline:
+                    seen = self.lines
+                    try:
+                        proc.wait(20)
+                        return "stopped"
+                    except subprocess.TimeoutExpired:
+                        if self.lines == seen:
+                            break
+                proc.terminate()               # asks for a clean stop (the bridge handles it)
                 try:
-                    proc.wait(15)
+                    proc.wait(30)
                     return "stopped"
                 except subprocess.TimeoutExpired:
                     pass
-            proc.terminate()                   # WinFsp drops the volume when the process ends
+            proc.kill()                        # WinFsp drops the volume when the process ends
+            try:
+                proc.wait(10)
+            except subprocess.TimeoutExpired:
+                return "the bridge did not stop; anything unsaved may be lost"
             return "stopped by force; anything unsaved may be lost"
 
 
@@ -421,58 +435,88 @@ class ImagePlay:
         self.note("ready")
         return "starting"
 
+    def _sources(self) -> Dict[str, str]:
+        try:
+            with open(os.path.join(self.folder, "sources.json"), encoding="utf-8") as f:
+                data = json.load(f)
+            return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
     def recover(self) -> None:
         """Changes left in the folder by a run that never reached Stop go back to their images."""
-        path = os.path.join(self.folder, "sources.json")
-        try:
-            with open(path, encoding="utf-8") as f:
-                sources = json.load(f)
-        except (OSError, ValueError):
-            sources = {}
-        if isinstance(sources, dict):
-            self.write_back({str(k): str(v) for k, v in sources.items()}, "recovered")
-        self.cleanup()
+        kept = self.write_back(self._sources(), "recovered")
+        self.cleanup(keep=kept)
+        if kept:
+            raise OSError(f"{len(kept)} changed cop(y/ies) could not be written back; "
+                          f"they are kept in {self.folder}")
 
-    def write_back(self, sources: Dict[str, str], how: str) -> None:
+    def write_back(self, sources: Dict[str, str], how: str) -> Dict[str, str]:
+        """Copy each changed copy back over its image. Returns the copies that could NOT be
+        put back (their changes would be lost if the copy were removed)."""
+        kept: Dict[str, str] = {}
         for target, src in sources.items():
             try:
-                if not os.path.isfile(target) or not os.path.isfile(src) or not writable(src):
+                if not os.path.isfile(target):
                     continue
                 with open(target, "rb") as f:
                     data = f.read()
-                with open(src, "rb") as f:
-                    if f.read() == data:
+                if os.path.isfile(src):
+                    with open(src, "rb") as f:
+                        if f.read() == data:
+                            continue                   # nothing changed
+                    if not writable(src):
+                        # a protected image: the copy was read-only too, so a difference here
+                        # means someone changed the file by hand; keep it rather than guess
+                        kept[target] = src
+                        self.note(f"error {os.path.basename(src)} is write-protected but its copy "
+                                  f"differs; the copy is kept at {target}")
                         continue
+                else:
+                    kept[target] = src
+                    self.note(f"error {os.path.basename(src)} is gone; its changed copy is kept at {target}")
+                    continue
                 tmp = src + ".part"
                 with open(tmp, "wb") as f:
                     f.write(data)
                 os.replace(tmp, src)
                 self.note(f"{os.path.basename(src)} {how}: the game's changes are in it")
             except OSError as e:
+                kept[target] = src
                 self.note(f"error couldn't write back to {os.path.basename(src)}: {e}; "
-                          f"the changed copy is still at {target}")
-                return
+                          f"the changed copy is kept at {target}")
+        return kept
 
     def stop(self) -> str:
-        try:
-            with open(os.path.join(self.folder, "sources.json"), encoding="utf-8") as f:
-                sources = {str(k): str(v) for k, v in json.load(f).items()}
-        except (OSError, ValueError, AttributeError):
-            sources = {}
-        self.write_back(sources, "updated")
-        self.cleanup()
+        kept = self.write_back(self._sources(), "updated")
+        self.cleanup(keep=kept)
         self.active = False
+        if kept:
+            return f"stopped, but {len(kept)} changed cop(y/ies) could not be written back; kept in {self.folder}"
         return "stopped"
 
-    def cleanup(self) -> None:
-        for path in list(self._targets().values()) + [os.path.join(self.folder, "play.cmd"),
-                                                       os.path.join(self.folder, "sources.json")]:
+    def cleanup(self, keep: Optional[Dict[str, str]] = None) -> None:
+        """Remove the play files, except copies whose changes have nowhere to go; those stay,
+        with a sources.json naming them, so a later start can try again."""
+        keep = keep or {}
+        for path in list(self._targets().values()) + [os.path.join(self.folder, "play.cmd")]:
+            if path in keep:
+                continue
             try:
                 if os.path.lexists(path):
                     os.chmod(path, stat.S_IWUSR | stat.S_IRUSR)
                     os.remove(path)
             except OSError as e:
                 self.note(f"error couldn't remove {os.path.basename(path)}: {e} (is the emulator still open?)")
+        src_json = os.path.join(self.folder, "sources.json")
+        try:
+            if keep:
+                with open(src_json, "w", encoding="utf-8") as f:
+                    json.dump(keep, f)
+            elif os.path.lexists(src_json):
+                os.remove(src_json)
+        except OSError as e:
+            self.note(f"error couldn't update {src_json}: {e}")
 
 
 # -- emulator ------------------------------------------------------------------------
@@ -560,8 +604,14 @@ class Station:
         self.job: Dict[str, Any] = {}  # the backup in progress, or the last one
         self.events: Deque[str] = collections.deque(maxlen=60)
         self.tray = False
-        self.lock = threading.Lock()   # one action at a time
+        self.probing = False
+        self.lock = threading.RLock()  # one action at a time
         threading.Thread(target=self.check_driver, daemon=True).start()
+        # L6: copies left by a run that never reached Stop go back first, whatever the mode
+        try:
+            ImagePlay(self.cfg, self.note).recover()
+        except OSError as e:
+            self.note(f"error {e}")
 
     def check_driver(self) -> None:
         self.driver_ok, self.driver_msg = driver_check()
@@ -588,8 +638,8 @@ class Station:
 
     @property
     def busy(self) -> bool:
-        """Something owns the board: the bridge, image play, or a backup."""
-        return self.running or self.backing_up
+        """Something owns the board: the bridge, image play, a backup, or a probe."""
+        return self.running or self.backing_up or self.probing
 
     @property
     def ready(self) -> bool:
@@ -600,14 +650,18 @@ class Station:
         return files_folder() if self.files is not None else self.cfg.mountpoint
 
     def refresh_probe(self) -> None:
-        if self.busy:
-            return
-        try:
-            self.probe = probe_drives(self.cfg)
-            self.probe_error = ""
-        except Exception as e:
-            self.probe = {}
-            self.probe_error = str(e)
+        with self.lock:                        # a probe owns the board; nothing starts meanwhile
+            if self.running or self.backing_up:
+                return
+            self.probing = True
+            try:
+                self.probe = probe_drives(self.cfg)
+                self.probe_error = ""
+            except Exception as e:
+                self.probe = {}
+                self.probe_error = str(e)
+            finally:
+                self.probing = False
 
     def state(self) -> Dict[str, Any]:
         self.last_seen = time.monotonic()
@@ -749,6 +803,9 @@ class Station:
                     images[name] = value
                 else:
                     images.pop(name, None)
+            paths = [os.path.realpath(p) for p in images.values()]
+            if len(paths) != len(set(paths)):
+                return "both drives can't play from the same image"
         for key, value in changes.items():
             setattr(self.cfg, key, value)
         self.cfg.images = images
@@ -793,12 +850,16 @@ class Station:
                         for head in range(be.heads):
                             data = be.read_track(cyl, head)
                             if data is None:
+                                if be.disk_changed():
+                                    raise RuntimeError("the disk was changed during the backup; nothing saved")
                                 job["bad"].append(f"{cyl}.{head}")
                                 data = b"\0" * be.track_bytes
                             if cyl == 0 and head == 0:
                                 label = label_of(data)
                             chunks.append(data)
                             job["track"] = cyl * be.heads + head + 1
+                    if be.disk_changed():
+                        raise RuntimeError("the disk was changed during the backup; nothing saved")
                     bad = len(job["bad"])
                     stem = (label or "disk") + (f" ({bad} unreadable tracks)" if bad else "")
                     path = store_image(self.library, b"".join(chunks), stem, ext)

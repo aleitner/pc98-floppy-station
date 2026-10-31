@@ -288,7 +288,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     if SYSTEM != "Windows":
         os.makedirs(mountpoint, exist_ok=True)
-        if os.listdir(mountpoint):
+        try:
+            leftovers = os.listdir(mountpoint)
+        except OSError:                       # a mount left behind by a killed run
+            import shutil
+            import subprocess
+            tool = shutil.which("fusermount3") or shutil.which("fusermount") or "umount"
+            subprocess.run([tool, "-u", mountpoint] if tool != "umount" else [tool, mountpoint], check=False)
+            try:
+                leftovers = os.listdir(mountpoint)
+            except OSError as e:
+                status(f"error {mountpoint} is a stale mount ({e}); unmount it and try again")
+                return 2
+        if leftovers:
             status(f"error {mountpoint} isn't empty; is the bridge already running?")
             return 2
 
@@ -329,6 +341,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     status(f"load {cmd_path(mountpoint, 'play.cmd')} in RetroArch with the Neko Project II kai core")
     if args.control_stdin:
         threading.Thread(target=watch_stdin, args=(ops, mountpoint), daemon=True).start()
+    if SYSTEM != "Windows":
+        import signal
+
+        def ask_to_stop(signum: int, frame: Any) -> None:
+            ops.quit.set()
+            threading.Thread(target=lambda: os.stat(mountpoint), daemon=True).start()
+        signal.signal(signal.SIGTERM, ask_to_stop)
     try:
         mfusepy.FUSE(ops, mountpoint, foreground=True, nothreads=True, **mount_options("pc98drives"))
     except Exception as e:

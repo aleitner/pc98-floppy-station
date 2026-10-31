@@ -124,6 +124,8 @@ def main() -> int:
         # choose backups for both drives: by name from the library, and by full path
         check("isn't in the library" in post("api/settings", {"image": {"FD1": "nothing.hdm"}})["message"],
               "an unknown image is refused")
+        check("same image" in post("api/settings", {"image": {"FD1": "TEST-No1.hdm", "FD2": "TEST-No1.hdm"}})["message"],
+              "both drives on one image is refused")
         check(post("api/settings", {"image": {"FD1": "TEST-No1.hdm", "FD2": b}})["message"] == "saved", "images chosen")
         s = get("api/state")
         check(s["drives"]["FD1"]["image_name"] == "TEST-No1.hdm" and s["drives"]["FD1"]["protected"] is True and
@@ -183,6 +185,27 @@ def main() -> int:
         check(open(b, "rb").read()[60 * 1024:61 * 1024] == crash_save, "the crashed run's save was recovered into the image")
         check(open(fd2, "rb").read()[60 * 1024:61 * 1024] == crash_save, "and the new copy starts from it")
         check(post("api/stop", {}).get("message") == "stopped", "stop again")
+
+        # write-back that cannot happen: the library folder is made read-only before Stop.
+        # The changed copy must survive, and go back once the folder is writable again.
+        check(post("api/start", {}).get("message") == "starting", "start for the write-back failure")
+        check(wait_for(lambda: get("api/state")["ready"] is True), "ready for the write-back failure")
+        blocked = b"BLOCKED!" * 128
+        with open(fd2, "r+b", buffering=0) as f:
+            f.seek(70 * 1024)
+            f.write(blocked)
+        os.chmod(lib, 0o555)
+        try:
+            msg = post("api/stop", {}).get("message", "")
+            check("could not be written back" in msg, "stop says the save could not be written back")
+            check(os.path.isfile(fd2) and open(fd2, "rb").read()[70 * 1024:71 * 1024] == blocked, "the changed copy is kept")
+            check(open(b, "rb").read()[70 * 1024:71 * 1024] != blocked, "the library image is untouched")
+        finally:
+            os.chmod(lib, 0o755)
+        check(post("api/start", {}).get("message") == "starting", "start after the folder is writable again")
+        check(wait_for(lambda: get("api/state")["ready"] is True), "ready after recovery")
+        check(open(b, "rb").read()[70 * 1024:71 * 1024] == blocked, "the kept copy was written back at the next start")
+        check(post("api/stop", {}).get("message") == "stopped", "stop cleanly after recovery")
 
         check(post("api/settings", {"image": {"FD1": "", "FD2": ""}})["message"] == "saved", "back to the drives")
         s = get("api/state")

@@ -135,6 +135,22 @@ def main() -> int:
     except DiskError:
         check(True, "no writes after the disk is broken")
 
+    # 5b. A write spanning several tracks changes nothing when one of them can't be read.
+    d3 = FakeDrive()
+    disk3 = TrackDisk(d3)
+    d3.unreadable.add((1, 0))                # track index 2
+    disk3.seek(1024 + 512)                   # starts in track 1, runs into track 2
+    try:
+        disk3.write(b"w" * 1024)
+        check(False, "a multi-track write stops before changing anything if a track is unreadable")
+    except DiskError:
+        check(disk3.dirty_tracks == 0 and disk3._cache.get(1) is None or disk3._cache[1][512:] != b"w" * 512,
+              "a multi-track write stops before changing anything if a track is unreadable")
+    d3.unreadable.clear()
+    disk3.seek(1024 + 512)
+    disk3.write(b"w" * 1024)
+    check(disk3.dirty_tracks == 2, "the same write succeeds once every track reads")
+
     # 6. An image opened read-only reports write protection, like a covered notch.
     import os
     import tempfile
