@@ -38,6 +38,7 @@ h2 small { font-family: var(--mono); font-size: 15px; color: var(--green); margi
 .drive .state b.lock { color: var(--yellow); }
 .drive .state b.lbl { color: #fff; }
 .path { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.path .job { color: var(--ink-dim); font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--field-deep); padding: 2px 8px; color: #fff; }
 button { font: inherit; font-family: var(--mono); color: var(--ink); background: var(--field-deep); border: 2px solid var(--frame); padding: 6px 16px; cursor: pointer; }
 button:hover:not(:disabled) { background: var(--frame); color: var(--field); }
@@ -91,6 +92,7 @@ a { color: var(--cyan); }
     <div class="drive" id="fd2"></div>
     <div class="row"><button type="button" class="small" data-post="/api/probe" id="probe">Check disks</button>
       <button type="button" class="small" id="swap">Swap left and right</button></div>
+    <p class="note">Clean the heads before an original disk goes in.</p>
   </section>
 
   <section class="panel">
@@ -138,7 +140,15 @@ a { color: var(--cyan); }
     else state = '<b>unit ' + esc(d.drive) + ' \u00b7 disk in</b>' + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>') + (d.label ? ' <b class="lbl">\u00b7 ' + esc(d.label) + '</b>' : '');
     el.innerHTML = '<span class="name">' + name + '</span><span class="side">' + d.side.toUpperCase() + ' drive</span>' +
       '<span class="state">' + state + '</span>' +
-      '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>';
+      '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>' +
+      '<span class="path"><button type="button" class="small" data-backup="' + name + '"' + (canBackup(d) ? '' : ' disabled') + '>Back up this disk</button><span class="job">' + jobText(name) + '</span></span>';
+  }
+  function canBackup(d) { return !S.running && S.identified && d.disk && !(S.job.name && !S.job.done); }
+  function jobText(name) {
+    var j = S.job; if (!j.name || j.name !== name) return "";
+    if (!j.done) return "reading track " + j.track + " of " + j.total;
+    if (j.error) return "failed: " + esc(j.error);
+    return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.backup_dir);
   }
   function render() {
     $("sys").textContent = S.system + " \u00b7 " + (S.board.port || (S.running ? "in use by the bridge" : "no board"));
@@ -184,6 +194,7 @@ a { color: var(--cyan); }
     }
     else if (t.id === "startstop") { $("msg").textContent = S.running ? "stopping" : "starting"; post(S.running ? "/api/stop" : "/api/start"); }
     else if (t.id === "play") { post("/api/launch"); }
+    else if (t.dataset.backup) { post("/api/backup", { name: t.dataset.backup }); }
     else if (t.id === "identify") { $("identmsg").textContent = "checking"; post("/api/identify").then(function (j) { $("identmsg").textContent = j.message || ""; }); }
     else if (t.id === "swap") { post("/api/settings", { swap: true }); }
     else if (t.id === "savecmd") { post("/api/settings", { emulator_command: $("emucmd").value }); }

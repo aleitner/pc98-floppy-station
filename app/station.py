@@ -282,6 +282,22 @@ def launch_emulator(cfg: Config) -> str:
     return "emulator started"
 
 
+def backup_dir() -> str:
+    docs = os.path.join(os.path.expanduser("~"), "Documents")
+    base = docs if os.path.isdir(docs) else os.path.expanduser("~")
+    return os.path.join(base, "PC98 Floppies")
+
+
+def label_from(sector: bytes) -> str:
+    text = sector[3:11].decode("ascii", "replace").strip("\0 ")
+    return text if text.isprintable() and text else ""
+
+
+def safe_name(text: str) -> str:
+    keep = "".join(c if c.isalnum() or c in "-_ " else "_" for c in text).strip()
+    return keep or "disk"
+
+
 def disk_label(path: str) -> str:
     """What the disk calls itself: the maker field of its boot sector, where PC-98 games
     usually put their name and disk number (e.g. "Xak2-No1"). Read through the bridge."""
@@ -307,6 +323,73 @@ class Station:
         self.last_seen = 0.0           # when the page last asked for the state
         self.seen_once = False
         self.page_gone = 0.0           # when the page said goodbye (window closed)
+        self.job: Dict[str, Any] = {}  # the backup in progress, or the last one
+        self.events: Deque[str] = collections.deque(maxlen=60)
+
+    def note(self, msg: str) -> None:
+        self.events.append(time.strftime("%H:%M:%S ") + msg)
+
+    def backup(self, name: str) -> str:
+        """Read the whole disk in FD1 or FD2 into an image file, once, track by track."""
+        if self.bridge.running:
+            return "stop the bridge first"
+        if self.job and not self.job.get("done"):
+            return "a backup is already running"
+        letter = {"FD1": self.cfg.left, "FD2": self.cfg.right}.get(name, "")
+        if letter not in ("A", "B"):
+            return "identify the left drive first"
+        self.job = {"name": name, "track": 0, "total": 0, "bad": [], "done": False, "error": "", "file": ""}
+        threading.Thread(target=self._backup_worker, args=(name, letter), daemon=True).start()
+        return "backing up " + name
+
+    def _backup_worker(self, name: str, letter: str) -> None:
+        from floppy_drive import GwBackend, GwBoard
+        job = self.job
+        ext = EXT[self.cfg.format]
+        try:
+            board = GwBoard(None)
+            try:
+                be = GwBackend(letter, self.cfg.format, board=board, cyl_offset=self.cfg.offsets.get(letter, 0))
+                be.READ_ATTEMPTS = 2            # an original gets few passes; the image shows what was weak
+                try:
+                    if not be.has_disk():
+                        raise RuntimeError("no disk in the drive")
+                    total = be.cyls * be.heads
+                    job["total"] = total
+                    chunks: List[bytes] = []
+                    label = ""
+                    for cyl in range(be.cyls):
+                        for head in range(be.heads):
+                            data = be.read_track(cyl, head)
+                            if data is None:
+                                job["bad"].append(f"{cyl}.{head}")
+                                data = b"\0" * be.track_bytes
+                            if cyl == 0 and head == 0:
+                                label = label_from(data)
+                            chunks.append(data)
+                            job["track"] = cyl * be.heads + head + 1
+                    folder = backup_dir()
+                    os.makedirs(folder, exist_ok=True)
+                    stem = safe_name(label) if label else time.strftime("disk %Y-%m-%d %H%M")
+                    path = os.path.join(folder, stem + ext)
+                    n = 2
+                    while os.path.exists(path):
+                        path = os.path.join(folder, f"{stem} ({n}){ext}")
+                        n += 1
+                    with open(path, "wb") as f:
+                        f.write(b"".join(chunks))
+                    job["file"] = path
+                    bad = len(job["bad"])
+                    self.note(f"{name}: saved {os.path.basename(path)}" + (f", {bad} track(s) unreadable" if bad else ""))
+                finally:
+                    be.close()
+            finally:
+                board.close()
+        except Exception as e:
+            job["error"] = str(e)
+            self.note(f"{name}: backup failed: {e}")
+        job["done"] = True
+        self.refresh_probe()
 
     def refresh_probe(self) -> None:
         if self.bridge.running:
@@ -349,7 +432,8 @@ class Station:
             "drives": drives, "probe_error": self.probe_error,
             "emulator": {"found": emu is not None, "custom": bool(cfg.emulator_command.strip()),
                          "name": "RetroArch, Neko Project II kai core" if emu else ""},
-            "log": list(self.bridge.log), "message": self.message,
+            "log": sorted(list(self.bridge.log) + list(self.events))[-60:], "message": self.message,
+            "job": self.job, "backup_dir": backup_dir(),
             "config": asdict(cfg),
         }
 
@@ -467,6 +551,8 @@ def make_handler(st: Station) -> type:
                 st.message = st.probe_error or "drives checked"
             elif path == "/api/launch":
                 st.message = launch_emulator(st.cfg)
+            elif path == "/api/backup":
+                st.message = st.backup(str(data.get("name", "")))
             elif path == "/api/settings":
                 st.message = st.settings(data)
             elif path == "/api/driver":
