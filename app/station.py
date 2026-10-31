@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-import floppy_bridge
+from bridge_paths import EXT, GEOMETRY, cmd_path, default_mountpoint
 
 SYSTEM = platform.system()
 PORT = 9801
@@ -59,7 +59,7 @@ def config_dir() -> str:
 class Config:
     left: str = ""                 # "A" or "B": which drive is the left one; "" = not yet identified
     format: str = "pc98.2hd"
-    mountpoint: str = field(default_factory=floppy_bridge.default_mountpoint)
+    mountpoint: str = field(default_factory=default_mountpoint)
     offsets: Dict[str, int] = field(default_factory=dict)
     emulator_command: str = ""     # custom launch command with {play} {fd1} {fd2}; "" = find RetroArch
 
@@ -260,10 +260,10 @@ def find_retroarch() -> Optional[Tuple[List[str], str]]:
 
 
 def launch_emulator(cfg: Config) -> str:
-    play = floppy_bridge.cmd_path(cfg.mountpoint, "play.cmd")
-    ext = floppy_bridge.EXT[cfg.format]
-    fd1 = floppy_bridge.cmd_path(cfg.mountpoint, "FD1" + ext)
-    fd2 = floppy_bridge.cmd_path(cfg.mountpoint, "FD2" + ext)
+    play = cmd_path(cfg.mountpoint, "play.cmd")
+    ext = EXT[cfg.format]
+    fd1 = cmd_path(cfg.mountpoint, "FD1" + ext)
+    fd2 = cmd_path(cfg.mountpoint, "FD2" + ext)
     if cfg.emulator_command.strip():
         import shlex
         cmd = [a.format(play=play, fd1=fd1, fd2=fd2) for a in shlex.split(cfg.emulator_command, posix=SYSTEM != "Windows")]
@@ -310,12 +310,12 @@ class Station:
         if self.message == "starting" and self.bridge.ready:
             self.message = "running"
         cfg = self.cfg
-        ext = floppy_bridge.EXT[cfg.format]
+        ext = EXT[cfg.format]
         board = None if self.bridge.running else board_port()
         drives: Dict[str, Any] = {}
         for name, letter in (("FD1", cfg.left), ("FD2", cfg.right)):
             info: Dict[str, Any] = {"drive": letter, "side": "left" if name == "FD1" else "right",
-                                    "file": floppy_bridge.cmd_path(cfg.mountpoint, name + ext)}
+                                    "file": cmd_path(cfg.mountpoint, name + ext)}
             if self.bridge.running:
                 info.update(self.bridge.slots.get(name, {}))
             elif letter in self.probe:
@@ -328,7 +328,7 @@ class Station:
             "driver": {"ok": self.driver_ok, "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},
             "running": self.bridge.running, "ready": self.bridge.ready, "error": self.bridge.error,
             "identified": cfg.left in ("A", "B"),
-            "mountpoint": cfg.mountpoint, "play": floppy_bridge.cmd_path(cfg.mountpoint, "play.cmd"),
+            "mountpoint": cfg.mountpoint, "play": cmd_path(cfg.mountpoint, "play.cmd"),
             "drives": drives, "probe_error": self.probe_error,
             "emulator": {"found": emu is not None, "custom": bool(cfg.emulator_command.strip()),
                          "name": "RetroArch, Neko Project II kai core" if emu else ""},
@@ -376,7 +376,7 @@ class Station:
             self.cfg.left = self.cfg.right
         if data.get("left") in ("A", "B"):             # for people who already know their ribbon
             self.cfg.left = str(data["left"])
-        if "format" in data and data["format"] in floppy_bridge.GEOMETRY:
+        if "format" in data and data["format"] in GEOMETRY:
             self.cfg.format = str(data["format"])
         self.cfg.save()
         return "saved"
@@ -500,6 +500,7 @@ def serve(open_browser: bool) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["--bridge"]:
+        import floppy_bridge                  # needs the FUSE driver; the window itself doesn't
         return floppy_bridge.main(args[1:])
     if args[:1] == ["--check-driver"]:
         try:

@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import errno
 import os
-import platform
 import stat
 import sys
 import threading
@@ -33,16 +32,13 @@ from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 import mfusepy
 
+from bridge_paths import EXT, GEOMETRY, SYSTEM, cmd_path, default_mountpoint
 from floppy_drive import Backend, DiskError, GwBackend, GwBoard, ImageBackend, TrackDisk
 
 QUIET_SECONDS = 1.0       # the game has stopped writing: put it on the disk
 POLL_SECONDS = 0.5        # how often to look for a swap while the game is reading
 FLUSH_TICK = 0.25
 T = TypeVar("T")
-
-GEOMETRY = {"pc98.2hd": (77, 2, 8 * 1024), "pc98.2dd": (80, 2, 8 * 512)}
-EXT = {"pc98.2hd": ".hdm", "pc98.2dd": ".img"}
-SYSTEM = platform.system()
 
 
 def status(msg: str) -> None:
@@ -255,16 +251,6 @@ def mount_options(name: str) -> Dict[str, Any]:
     if SYSTEM == "Darwin":
         opts.update(volname="PC98 Drives", noappledouble=True, noapplexattr=True)
     return opts
-
-
-def default_mountpoint() -> str:
-    return "P:" if SYSTEM == "Windows" else os.path.expanduser("~/PC98Drives")
-
-
-def cmd_path(mountpoint: str, name: str) -> str:
-    if SYSTEM == "Windows":
-        return f"{mountpoint}\\{name}"
-    return os.path.join(mountpoint, name)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
