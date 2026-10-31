@@ -32,12 +32,16 @@ Parts to buy, with links: [PARTS.md](PARTS.md).
 
 Reading, writing and copying disks is done with the
 [Greaseweazle host tools](https://github.com/keirf/greaseweazle) themselves.
-What this repository adds is **the bridge**, [`app/floppy_bridge.py`](app/floppy_bridge.py):
-it shows the two real drives as disk image files (`FD1.hdm`, `FD2.hdm`) that an
-emulator opens like any other image. Reads come from the drive on demand, writes go
-back to the disk a moment later, and a disk swap is noticed by the drive's own
-disk-change line. It needs a FUSE driver: libfuse on Linux, WinFsp on Windows,
-FUSE-T or macFUSE on macOS. Setup and use: [app/BRIDGE.md](app/BRIDGE.md).
+What this repository adds is **the bridge**: it shows the two real drives as disk
+image files (`FD1.hdm`, `FD2.hdm`) that an emulator opens like any other image. Reads
+come from the drive on demand, writes go back to the disk a moment later, and a disk
+swap is noticed by the drive's own disk-change line.
+
+[`app/station.py`](app/station.py) is the window for it: it shows the board and both
+drives, a Start button, the two files, and a Play button when RetroArch with the
+PC-98 core is installed. [`app/floppy_bridge.py`](app/floppy_bridge.py) is the bridge
+itself, which the window runs for you. It needs a FUSE driver: libfuse on Linux,
+WinFsp on Windows, FUSE-T or macFUSE on macOS. Setup and use: [app/BRIDGE.md](app/BRIDGE.md).
 
 The bridge is proven on Linux with RetroArch's Neko Project II kai core: a game
 boots from the real drives and reads correctly from both. Saving back to a disk,

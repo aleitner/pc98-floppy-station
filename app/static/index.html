@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC-98 Floppy Station</title>
+<style>
+/* The same world as the project site: a PC-98 setup screen. Blue field, double frame,
+   bitmap type. One screen, no scrolling needed on a laptop: drives, bridge, emulator, log. */
+@font-face { font-family: "DotGothic16"; src: url("/static/fonts/DotGothic16-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "VT323"; src: url("/static/fonts/VT323-Regular.ttf") format("truetype"); font-display: swap; }
+:root {
+  --field: #1414b4; --field-deep: #0c0c8c; --frame: #ffff80;
+  --ink: #f4f4ff; --ink-dim: #b8b8e8; --green: #70ff70; --yellow: #ffff60; --cyan: #70ffff; --red: #ff8080;
+  --mono: "DotGothic16", "MS Gothic", monospace; --display: "VT323", "DotGothic16", monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--field); color: var(--ink); font-family: var(--mono); font-size: 17px; line-height: 1.5; }
+.screen { max-width: 1000px; margin: 0 auto; padding: 14px 16px; }
+.frame { border: 3px double var(--frame); outline: 3px solid var(--frame); outline-offset: 4px; padding: 18px 22px 14px; margin: 7px; }
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 20px; }
+h1 { font-family: var(--display); font-size: 46px; line-height: 1; margin: 0; color: #fff; }
+.kana { color: var(--green); margin: 2px 0 0; font-size: 17px; }
+.sys { color: var(--yellow); font-size: 15px; }
+hr { border: 0; border-top: 2px dashed var(--ink-dim); opacity: .55; margin: 14px 0; }
+h2 { font-family: var(--display); font-size: 28px; line-height: 1; color: #fff; margin: 0 0 10px; }
+h2 small { font-family: var(--mono); font-size: 15px; color: var(--green); margin-left: 10px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 28px; }
+.panel { min-width: 0; }
+.drive { border: 2px solid var(--frame); padding: 10px 14px; margin-bottom: 10px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; }
+.drive .name { font-family: var(--display); font-size: 26px; line-height: 1; color: #fff; }
+.drive .side { color: var(--yellow); }
+.drive .state { grid-column: 1 / -1; color: var(--ink-dim); }
+.drive .state b { font-weight: 400; color: var(--green); }
+.drive .state b.off { color: var(--ink-dim); }
+.drive .state b.lock { color: var(--yellow); }
+.path { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--field-deep); padding: 2px 8px; color: #fff; }
+button { font: inherit; font-family: var(--mono); color: var(--ink); background: var(--field-deep); border: 2px solid var(--frame); padding: 6px 16px; cursor: pointer; }
+button:hover:not(:disabled) { background: var(--frame); color: var(--field); }
+button:disabled { opacity: .45; cursor: default; }
+button.big { font-family: var(--display); font-size: 30px; line-height: 1; padding: 10px 26px; }
+button.small { padding: 2px 10px; font-size: 15px; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; }
+.line { margin: 4px 0; }
+.line b { font-weight: 400; color: var(--green); }
+.line b.bad { color: var(--red); }
+.note { color: var(--ink-dim); font-size: 15px; margin: 6px 0; }
+.msg { min-height: 1.5em; color: var(--yellow); margin: 6px 0 0; }
+.box { border: 2px solid var(--frame); padding: 10px 14px; margin: 8px 0 14px; }
+.box.warn { border-color: var(--red); }
+input[type=text] { font: inherit; font-family: var(--mono); width: 100%; background: var(--field-deep); color: #fff; border: 2px solid var(--ink-dim); padding: 4px 8px; }
+pre.log { background: var(--field-deep); color: var(--ink); padding: 10px 12px; margin: 0; height: 190px; overflow-y: auto; font-size: 15px; line-height: 1.4; border-left: 4px solid var(--green); white-space: pre-wrap; }
+details summary { cursor: pointer; color: var(--yellow); }
+footer { margin-top: 14px; padding-top: 8px; border-top: 2px dashed var(--ink-dim); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 20px; color: var(--ink-dim); font-size: 15px; }
+.cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cur::after { animation: none; } }
+a { color: var(--cyan); }
+@media (max-width: 700px) { .frame { padding: 14px 12px 10px; } h1 { font-size: 36px; } }
+</style>
+</head>
+<body>
+<div class="screen"><div class="frame">
+<header>
+  <div><h1>PC-98 FLOPPY STATION</h1><p class="kana">ＰＣ－９８ フロッピー ステーション</p></div>
+  <p class="sys" id="sys"></p>
+</header>
+<hr>
+
+<div id="setup" class="box" hidden>
+  <h2>First run <small>はじめに</small></h2>
+  <p>The two drives need telling apart once. <strong>Put a disk in the LEFT drive only</strong>, close its lever, and press Check. The unit that holds a disk becomes the left drive.</p>
+  <div class="row"><button type="button" id="identify">Check</button><span id="identmsg" class="msg"></span></div>
+</div>
+
+<div id="driverbox" class="box warn" hidden>
+  <h2>Disk driver missing <small>ドライバ</small></h2>
+  <p id="driverhint"></p>
+  <div class="row"><button type="button" class="small" data-post="/api/driver">Check again</button></div>
+</div>
+
+<div class="grid">
+  <section class="panel">
+    <h2>Drives <small>ドライブ</small></h2>
+    <div class="drive" id="fd1"></div>
+    <div class="drive" id="fd2"></div>
+    <div class="row"><button type="button" class="small" data-post="/api/probe" id="probe">Check disks</button>
+      <button type="button" class="small" id="swap">Swap left and right</button></div>
+    <p class="note">A disk with its notch covered is write-protected: the game can read it but never write to it. Leave the notch open only on a save disk.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Bridge <small>ブリッジ</small></h2>
+    <p class="line">Greaseweazle: <b id="board"></b></p>
+    <p class="line">Bridge: <b id="bstate"></b></p>
+    <div class="row"><button type="button" class="big" id="startstop">START</button><span class="msg" id="msg"></span></div>
+    <p class="note">While it runs, the drives appear as the two files above. Start it before the emulator. Stop it when you're done; it writes anything still pending first.</p>
+
+    <h2 style="margin-top:14px">Emulator <small>エミュレータ</small></h2>
+    <p class="line" id="emuline"></p>
+    <div class="row"><button type="button" id="play" class="big">PLAY</button></div>
+    <details><summary>Use another emulator</summary>
+      <p class="note">Open <code>FD1.hdm</code> in its first drive and <code>FD2.hdm</code> in its second, the way you'd open any disk image. Or give a command to run here, with <code>{fd1}</code>, <code>{fd2}</code> and <code>{play}</code> standing for the files:</p>
+      <div class="row"><input type="text" id="emucmd" placeholder='e.g. "C:\np21w\np21w.exe" {fd1} {fd2}'><button type="button" class="small" id="savecmd">Save</button></div>
+    </details>
+  </section>
+</div>
+
+<h2 style="margin-top:16px">Log <small>ログ</small></h2>
+<pre class="log" id="log"></pre>
+
+<footer><span class="cur" id="ready">READY</span><span id="files"></span><span>Stop the bridge, then close this window; the program ends by itself.</span></footer>
+</div></div>
+
+<script>
+(function () {
+  var TOKEN = "__TOKEN__";
+  var S = null;
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+  function post(path, body) {
+    return fetch(path, { method: "POST", headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
+                         body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.message !== undefined) $("msg").textContent = j.message;
+      refresh();
+      return j;
+    });
+  }
+  function drive(el, name, d, running) {
+    var state;
+    if (!S.identified) state = '<b class="off">unit not yet identified</b>';
+    else if (d.disk === undefined) state = '<b class="off">unit ' + esc(d.drive) + '</b>';
+    else if (!d.disk) state = '<b class="off">unit ' + esc(d.drive) + ' \u00b7 no disk</b>';
+    else state = '<b>unit ' + esc(d.drive) + ' \u00b7 disk in</b>' + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>');
+    el.innerHTML = '<span class="name">' + name + '</span><span class="side">' + d.side.toUpperCase() + ' drive</span>' +
+      '<span class="state">' + state + '</span>' +
+      '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>';
+  }
+  function render() {
+    $("sys").textContent = S.system + " \u00b7 " + (S.board.port || (S.running ? "in use by the bridge" : "no board"));
+    $("setup").hidden = S.identified;
+    $("driverbox").hidden = S.driver.ok;
+    $("driverhint").textContent = S.driver.hint + (S.driver.detail ? " (" + S.driver.detail + ")" : "");
+    drive($("fd1"), "FD1", S.drives.FD1, S.running);
+    drive($("fd2"), "FD2", S.drives.FD2, S.running);
+    $("board").textContent = S.board.present ? (S.running ? "connected, in use" : "connected on " + S.board.port) : "not found";
+    $("board").className = S.board.present ? "" : "bad";
+    var b = $("bstate");
+    if (S.running && S.ready) { b.textContent = "running, files in " + S.mountpoint; b.className = ""; }
+    else if (S.running) { b.textContent = "starting"; b.className = ""; }
+    else if (S.error) { b.textContent = "stopped: " + S.error; b.className = "bad"; }
+    else { b.textContent = "stopped"; b.className = "off"; }
+    var ss = $("startstop");
+    ss.textContent = S.running ? "STOP" : "START";
+    ss.disabled = !S.running && (!S.identified || !S.driver.ok || !S.board.present);
+    $("probe").disabled = S.running;
+    $("swap").disabled = S.running || !S.identified;
+    $("emuline").innerHTML = S.emulator.custom ? "your own command" :
+      S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" : '<b class="bad">RetroArch with the PC-98 core not found</b>; open the two files in your emulator';
+    $("play").disabled = !(S.running && S.ready && (S.emulator.found || S.emulator.custom));
+    if (document.activeElement !== $("emucmd")) $("emucmd").value = S.config.emulator_command || "";
+    var log = $("log"); var atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+    log.textContent = S.log.join("\n");
+    if (atEnd) log.scrollTop = log.scrollHeight;
+    $("ready").textContent = S.running ? (S.ready ? "RUNNING" : "WAIT") : "READY";
+    $("files").textContent = S.running ? "play.cmd: " + S.play : "";
+    if (S.message && !$("msg").textContent) $("msg").textContent = S.message;
+  }
+  function refresh() {
+    return fetch("/api/state", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (s) { S = s; render(); })
+      .catch(function () { $("bstate").textContent = "the program has closed"; $("bstate").className = "bad"; });
+  }
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest("button"); if (!t) return;
+    if (t.dataset.post) { $("msg").textContent = ""; post(t.dataset.post); }
+    else if (t.dataset.copy) {
+      var label = t.textContent;
+      navigator.clipboard.writeText(t.dataset.copy).then(function () { t.textContent = "Copied"; setTimeout(function () { t.textContent = label; }, 1200); },
+                                                          function () { t.textContent = "Select it"; setTimeout(function () { t.textContent = label; }, 1200); });
+    }
+    else if (t.id === "startstop") { $("msg").textContent = S.running ? "stopping" : "starting"; post(S.running ? "/api/stop" : "/api/start"); }
+    else if (t.id === "play") { post("/api/launch"); }
+    else if (t.id === "identify") { $("identmsg").textContent = "checking"; post("/api/identify").then(function (j) { $("identmsg").textContent = j.message || ""; }); }
+    else if (t.id === "swap") { post("/api/settings", { swap: true }); }
+    else if (t.id === "savecmd") { post("/api/settings", { emulator_command: $("emucmd").value }); }
+  });
+  refresh();
+  setInterval(refresh, 1000);
+})();
+</script>
+</body>
+</html>

@@ -71,6 +71,7 @@ class BridgeFS(mfusepy.Operations):
         self.gid = getattr(os, "getgid", lambda: 0)()
         self.started = time.time()
         self.stop = threading.Event()
+        self.quit = threading.Event()         # set by the controller; acted on inside a FUSE call
         self.flusher = threading.Thread(target=self._flush_loop, daemon=True)
 
     # -- errors: a failed drive operation must never take the mount down ----
@@ -97,14 +98,19 @@ class BridgeFS(mfusepy.Operations):
         if not force and now - slot.polled < POLL_SECONDS:
             return
         slot.polled = now
-        if slot.backend.poll_change():
+        changed = slot.backend.poll_change()
+        if changed:
             lost = slot.disk.new_disk()
             if lost:
                 status(f"error {slot.name}: disk changed with {lost} track(s) not yet saved; "
                        "they were NOT written to the new disk")
             slot.changed_at = time.time()
-            status(f"{slot.name}: disk changed")
+        was = slot.protected
         slot.protected = slot.backend.write_protected()   # pin 28 can settle after the swap
+        if changed:
+            status(f"{slot.name}: disk changed ({disk_state(slot)})")
+        elif slot.protected != was:
+            status(f"{slot.name}: now {disk_state(slot)}")
 
     # -- writing back --------------------------------------------------------
     def _flush_loop(self) -> None:
@@ -150,6 +156,8 @@ class BridgeFS(mfusepy.Operations):
 
     # -- files ---------------------------------------------------------------
     def getattr(self, path: str, fh: Optional[int] = None) -> Dict[str, Any]:
+        if self.quit.is_set():
+            mfusepy.fuse_exit()               # only valid from inside a FUSE call, hence here
         base = dict(st_uid=self.uid, st_gid=self.gid, st_atime=self.started, st_ctime=self.started)
         if path == "/":
             return dict(base, st_mode=stat.S_IFDIR | 0o755, st_nlink=2, st_size=0, st_mtime=self.started)
@@ -221,6 +229,24 @@ class BridgeFS(mfusepy.Operations):
         return 0
 
 
+def disk_state(slot: Slot) -> str:
+    if not slot.backend.has_disk():
+        return "no disk"
+    return "write-protected" if slot.protected else "writable"
+
+
+def watch_stdin(ops: BridgeFS, mountpoint: str) -> None:
+    """Stop when the controlling program says 'stop' or goes away (stdin closes)."""
+    for line in sys.stdin:
+        if line.strip() == "stop":
+            break
+    ops.quit.set()
+    try:
+        os.stat(mountpoint + ("\\" if SYSTEM == "Windows" else ""))   # wakes the FUSE loop
+    except OSError:
+        pass
+
+
 def mount_options(name: str) -> Dict[str, Any]:
     """Nothing may be cached by the system: after a swap the same file holds a different disk."""
     if SYSTEM == "Windows":
@@ -252,6 +278,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--port", help="the board's serial port, if it isn't found by itself")
     ap.add_argument("--image", action="append", default=[], metavar="FD1=PATH",
                     help="use an image file instead of a drive (testing)")
+    ap.add_argument("--control-stdin", action="store_true",
+                    help="stop when 'stop' arrives on stdin or stdin closes (for a controlling program)")
     args = ap.parse_args(argv)
 
     mountpoint = os.path.abspath(args.mountpoint) if SYSTEM != "Windows" else args.mountpoint
@@ -293,6 +321,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     names = " ".join(cmd_path(mountpoint, p[1:]) for p in slots)
     ops = BridgeFS(slots, f"np2kai {names}\n".encode())
     status(f"load {cmd_path(mountpoint, 'play.cmd')} in RetroArch with the Neko Project II kai core")
+    if args.control_stdin:
+        threading.Thread(target=watch_stdin, args=(ops, mountpoint), daemon=True).start()
     try:
         mfusepy.FUSE(ops, mountpoint, foreground=True, nothreads=True, **mount_options("pc98drives"))
     finally:
