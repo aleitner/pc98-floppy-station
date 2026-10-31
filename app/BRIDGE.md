@@ -39,21 +39,16 @@ were found, both drives with their disk state, and a Start button.
 that holds a disk is remembered as the left drive; it becomes `FD1`. If you ever move the
 ribbon, press "Swap left and right".
 
-**Every run:** press one of the two start buttons. The drives appear as `FD1.hdm` and
-`FD2.hdm`, with a `play.cmd` beside them. A disk whose write notch is covered shows as
-write-protected and the file is read-only, so the game can never write to it.
+**Every run:** press Start. The drives appear as `FD1.hdm` and `FD2.hdm` in `~/PC98Drives`
+(`P:` on Windows), with a `play.cmd` beside them. A disk whose write notch is covered shows
+as write-protected and the file is read-only, so the game can never write to it.
 
-- **Load into memory** (`loaded_mode.py`) reads each disk in full into `~/PC98Drives` as an
-  ordinary file, then watches the files: a save is written back to the floppy, verified,
-  about a second after the game stops writing; a swapped disk is read in and its file
-  replaced. No driver is needed. The first time a write-protected disk is loaded, its image
-  is saved under the disk's own name in `Documents/PC98 Floppies`, the same folder the Back
-  up button uses; next time the disk is found there by its first track, spot-checked against
-  the drive, and starts in seconds. A writable disk is always read afresh, because stale save
-  data must never go back onto it.
-- **Play from disk** runs the bridge below: the files are the drives themselves, every read
-  goes to the floppy. It needs the driver from the table above. The files appear in
-  `~/PC98Drives` (`P:` on Windows).
+**Backups:** each drive has *Back up this disk*, which reads the disk once, track by track,
+into `Documents/PC98 Floppies` under the disk's own name (unreadable tracks are counted,
+not retried over and over). *Use a backup instead* lists that folder: pick an image and the
+drive plays from the file rather than the floppy; saves then land in the file. *Use the
+drive* switches back. When both drives play from images, the files are placed directly
+(links, or copies written back on Stop) and no driver is involved.
 
 **Play:** if RetroArch with the Neko Project II kai core is installed, the Play button starts
 it with both drives loaded. For any other emulator, open the two files in its first and

@@ -1,8 +1,9 @@
 """PC-98 Floppy Station: a window for the floppy bridge, no command line needed.
 
-Double-click it (or run `python3 station.py`). It opens a page in the browser that shows
-the Greaseweazle and both drives, a Start/Stop for the bridge, the two image files an
-emulator opens, and a Play button when RetroArch with the PC-98 core is installed.
+Double-click it (or run `python3 station.py`). A window shows the Greaseweazle and both
+drives, Start/Stop, the two image files an emulator opens, and a Play button when
+RetroArch with the PC-98 core is installed. Each drive can be backed up to an image file,
+and a backup can stand in for a drive: then the game plays from that file instead.
 
 The bridge itself runs as a child process (floppy_bridge.py), so a drive fault can never
 take the window down. Settings live in the user's config folder.
@@ -15,6 +16,7 @@ take the window down. Settings live in the user's config folder.
 from __future__ import annotations
 
 import collections
+import glob
 import http.server
 import json
 import mimetypes
@@ -32,22 +34,19 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from bridge_paths import EXT, GEOMETRY, cmd_path, default_mountpoint
-from loaded_mode import LoadedDrives, store_image
+from bridge_paths import EXT, cmd_path, default_mountpoint
 
 SYSTEM = platform.system()
 PORT = 9801
 APP_NAME = "PC-98 Floppy Station"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 FROZEN = getattr(sys, "frozen", False)
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.join(HERE, "static")
-
-TEST_IMAGES = os.environ.get("PC98_STATION_IMAGES", "")   # "FD1=a.hdm,FD2=b.hdm", tests only
+SLOTS = ("FD1", "FD2")
 
 WINFSP_URL = "https://winfsp.dev/rel/"
 FUSET_URL = "https://www.fuse-t.org/"
-NP2KAI_URL = "https://github.com/AZO234/NP2kai"
 
 
 # -- settings -------------------------------------------------------------------
@@ -60,19 +59,28 @@ def config_dir() -> str:
                         "pc98-floppy-station")
 
 
+def default_library() -> str:
+    docs = os.path.join(os.path.expanduser("~"), "Documents")
+    base = docs if os.path.isdir(docs) else os.path.expanduser("~")
+    return os.path.join(base, "PC98 Floppies")
+
+
 @dataclass
 class Config:
     left: str = ""                 # "A" or "B": which drive is the left one; "" = not yet identified
     format: str = "pc98.2hd"
-    mountpoint: str = field(default_factory=default_mountpoint)      # live mode: the driver's mount
-    folder: str = field(default_factory=lambda: os.path.expanduser("~/PC98Drives"))  # loaded mode: a plain folder
-    library: str = ""              # where disk images are kept; "" = Documents/PC98 Floppies
+    mountpoint: str = field(default_factory=default_mountpoint)   # where the bridge puts the files
+    library: str = ""              # where backups live; "" = Documents/PC98 Floppies
     offsets: Dict[str, int] = field(default_factory=dict)
     emulator_command: str = ""     # custom launch command with {play} {fd1} {fd2}; "" = find RetroArch
+    images: Dict[str, str] = field(default_factory=dict)   # FD1/FD2 -> image file standing in for the drive
 
     @property
     def right(self) -> str:
         return {"A": "B", "B": "A"}.get(self.left, "")
+
+    def letter(self, name: str) -> str:
+        return self.left if name == "FD1" else self.right
 
     @staticmethod
     def path() -> str:
@@ -94,7 +102,55 @@ class Config:
             json.dump(asdict(self), f, indent=2)
 
 
-# -- hardware checks (only while the bridge is not running: it owns the board) ----
+# -- disk images ---------------------------------------------------------------------
+def label_of(sector: bytes) -> str:
+    """What the disk calls itself: the maker field of its boot sector, where PC-98 games
+    usually put their name and disk number (e.g. "Xak2-No1")."""
+    text = sector[3:11].decode("ascii", "replace").strip("\0 ")
+    return text if text.isprintable() and text else ""
+
+
+def disk_label(path: str) -> str:
+    try:
+        with open(path, "rb") as f:
+            return label_of(f.read(16))
+    except OSError:
+        return ""
+
+
+def safe_name(text: str) -> str:
+    keep = "".join(c if c.isalnum() or c in "-_ " else "_" for c in text).strip()
+    return keep or "disk"
+
+
+def store_image(library: str, image: bytes, label: str, ext: str) -> str:
+    """Save an image under the disk's own name, never over a different disk's file."""
+    os.makedirs(library, exist_ok=True)
+    stem = safe_name(label) if label else time.strftime("disk %Y-%m-%d %H%M")
+    path = os.path.join(library, stem + ext)
+    n = 2
+    while os.path.exists(path):
+        with open(path, "rb") as f:
+            if f.read() == image:
+                return path                   # already there
+        path = os.path.join(library, f"{stem} ({n}){ext}")
+        n += 1
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(image)
+    os.replace(tmp, path)
+    return path
+
+
+def list_library(library: str, ext: str) -> List[str]:
+    try:
+        names = [os.path.basename(p) for p in glob.glob(os.path.join(glob.escape(library), "*" + ext))]
+    except OSError:
+        return []
+    return sorted(names, key=str.lower)
+
+
+# -- hardware checks (only while nothing is running: the bridge owns the board) ------
 def board_port() -> Optional[str]:
     try:
         from greaseweazle.tools import util
@@ -163,15 +219,14 @@ class Bridge:
         with self.lock:
             if self.running:
                 return "already running"
-            args = ["--bridge", "--control-stdin", "--format", cfg.format, "--mountpoint", cfg.mountpoint]
-            if TEST_IMAGES:                      # the test suite stands image files in for drives
-                for pair in TEST_IMAGES.split(","):
-                    args += ["--image", pair]
-            else:
-                args += ["--fd1", cfg.left, "--fd2", cfg.right]
-                for letter, n in cfg.offsets.items():
-                    if n:
-                        args += ["--offset", f"{letter}={n}"]
+            args = ["--bridge", "--control-stdin", "--format", cfg.format, "--mountpoint", cfg.mountpoint,
+                    "--fd1", cfg.left or "none", "--fd2", cfg.right or "none"]
+            for letter, n in cfg.offsets.items():
+                if n:
+                    args += ["--offset", f"{letter}={n}"]
+            for name, path in cfg.images.items():
+                if path:
+                    args += ["--image", f"{name}={path}"]
             self.log.clear()
             self.slots = {}
             self.error = ""
@@ -201,15 +256,15 @@ class Bridge:
             self.ready = True
         elif line.startswith("error "):
             self.error = line[6:]
-        elif " is drive " in line:                      # "FD1.hdm is drive A (writable)"
+        elif " is drive " in line or " is /" in line or (" is " in line and "(" in line and line.startswith("FD")):
+            # "FD1.hdm is drive A (writable)"  or  "FD1.hdm is /path/to/image.hdm (write-protected)"
             name = line.split(".", 1)[0]
-            drive = line.split(" is drive ", 1)[1].split(" ", 1)[0]
             state = line.rsplit("(", 1)[1].rstrip(")")
-            self.slots[name] = {"drive": drive, "disk": state != "no disk", "protected": state == "write-protected"}
+            self.slots[name] = {"disk": state != "no disk", "protected": state == "write-protected"}
         elif ": disk changed (" in line or ": now " in line:
             name = line.split(":", 1)[0]
             state = line.rsplit("(", 1)[1].rstrip(")") if "(" in line else line.rsplit(" now ", 1)[1]
-            slot = self.slots.setdefault(name, {"drive": "?"})
+            slot = self.slots.setdefault(name, {})
             slot["disk"] = state != "no disk"
             slot["protected"] = state == "write-protected"
 
@@ -238,6 +293,75 @@ class Bridge:
                 else:
                     proc.terminate()
             return "stopped"
+
+
+# -- playing from image files only: plain files, no driver -------------------------------
+def files_folder() -> str:
+    return os.path.expanduser("~/PC98Drives")
+
+
+class ImagePlay:
+    """Both drives stand in as images: put the two files where the emulator looks, as links
+    where the system allows and copies otherwise, so no driver is involved at all."""
+
+    def __init__(self, cfg: Config, log: Callable[[str], None]) -> None:
+        self.cfg = cfg
+        self.log = log
+        self.folder = files_folder()
+        self.copies: Dict[str, str] = {}      # target -> source, for files that had to be copied
+        self.active = False
+
+    def start(self) -> str:
+        ext = EXT[self.cfg.format]
+        os.makedirs(self.folder, exist_ok=True)
+        for name in SLOTS:
+            src = self.cfg.images.get(name, "")
+            target = os.path.join(self.folder, name + ext)
+            self._remove(target)
+            if not src:
+                continue
+            if not os.path.isfile(src):
+                return f"{name}: the image {src} doesn't exist"
+            try:
+                if SYSTEM == "Windows":
+                    os.link(src, target)
+                else:
+                    os.symlink(os.path.abspath(src), target)
+            except OSError:
+                shutil.copy2(src, target)
+                self.copies[target] = src
+            self.log(f"{name}: {os.path.basename(src)}" +
+                     (" (write-protected)" if not os.access(src, os.W_OK) else ""))
+        names = " ".join(cmd_path(self.folder, n + ext) for n in SLOTS if self.cfg.images.get(n))
+        with open(os.path.join(self.folder, "play.cmd"), "w") as f:
+            f.write(f"np2kai {names}\n")
+        self.active = True
+        self.log("ready")
+        return "starting"
+
+    def stop(self) -> str:
+        ext = EXT[self.cfg.format]
+        for target, src in self.copies.items():
+            try:
+                if os.access(src, os.W_OK) and open(target, "rb").read() != open(src, "rb").read():
+                    shutil.copy2(target, src)
+                    self.log(f"{os.path.basename(src)} updated with the game's changes")
+            except OSError as e:
+                self.log(f"error couldn't write back to {src}: {e}")
+        for name in SLOTS:
+            self._remove(os.path.join(self.folder, name + ext))
+        self._remove(os.path.join(self.folder, "play.cmd"))
+        self.copies = {}
+        self.active = False
+        return "stopped"
+
+    @staticmethod
+    def _remove(path: str) -> None:
+        try:
+            if os.path.lexists(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 # -- emulator ------------------------------------------------------------------------
@@ -292,34 +416,12 @@ def launch_emulator(cfg: Config, where: str) -> str:
     return "emulator started"
 
 
-def backup_dir() -> str:
-    docs = os.path.join(os.path.expanduser("~"), "Documents")
-    base = docs if os.path.isdir(docs) else os.path.expanduser("~")
-    return os.path.join(base, "PC98 Floppies")
-
-
-def label_from(sector: bytes) -> str:
-    text = sector[3:11].decode("ascii", "replace").strip("\0 ")
-    return text if text.isprintable() and text else ""
-
-
-def disk_label(path: str) -> str:
-    """What the disk calls itself: the maker field of its boot sector, where PC-98 games
-    usually put their name and disk number (e.g. "Xak2-No1"). Read through the bridge."""
-    try:
-        with open(path, "rb") as f:
-            raw = f.read(16)[3:11]
-    except OSError:
-        return ""
-    text = raw.decode("ascii", "replace").strip("\0 ")
-    return text if text.isprintable() and text else ""
-
-
 # -- the local web app ----------------------------------------------------------------
 class Station:
     def __init__(self) -> None:
         self.cfg = Config.load()
         self.bridge = Bridge()
+        self.files: Optional[ImagePlay] = None
         self.token = secrets.token_urlsafe(16)
         self.driver_ok, self.driver_msg = driver_check()
         self.probe: Dict[str, Dict[str, Any]] = {}
@@ -330,82 +432,172 @@ class Station:
         self.page_gone = 0.0           # when the page said goodbye (window closed)
         self.job: Dict[str, Any] = {}  # the backup in progress, or the last one
         self.events: Deque[str] = collections.deque(maxlen=60)
-        self.loaded: Optional[LoadedDrives] = None   # the no-driver mode, while it runs
-        self.mode = ""                 # "live" or "loaded" while something runs
 
     def note(self, msg: str) -> None:
         self.events.append(time.strftime("%H:%M:%S ") + msg)
 
     @property
+    def library(self) -> str:
+        return self.cfg.library or default_library()
+
+    @property
+    def all_images(self) -> bool:
+        return all(self.cfg.images.get(n) for n in SLOTS)
+
+    @property
     def running(self) -> bool:
-        return self.bridge.running or self.loaded is not None
+        return self.bridge.running or self.files is not None
 
     @property
     def ready(self) -> bool:
-        if self.loaded is not None:
-            return self.loaded.ready
-        return self.bridge.ready
-
-    @property
-    def library(self) -> str:
-        return self.cfg.library or backup_dir()
+        return self.files is not None or self.bridge.ready
 
     @property
     def where(self) -> str:
-        """The folder the emulator's files are in for the mode in use."""
-        return self.cfg.folder if self.mode == "loaded" else self.cfg.mountpoint
+        return files_folder() if self.files is not None else self.cfg.mountpoint
 
-    def _backends(self) -> Tuple[Dict[str, Any], Callable[[], None]]:
-        """Real drives, or image files when the test suite says so. Returns the backends
-        and what to call to release the board."""
-        if TEST_IMAGES:
-            from floppy_drive import ImageBackend
-            cyls, heads, tb = GEOMETRY[self.cfg.format]
-            out: Dict[str, Any] = {}
-            for pair in TEST_IMAGES.split(","):
-                name, path = pair.split("=", 1)
-                be = ImageBackend(path, cyls, heads, tb)
-                be.readonly = not os.access(path, os.W_OK)
-                out[name] = be
-            return out, lambda: None
-        from floppy_drive import GwBackend, GwBoard
-        board = GwBoard(None)
-        real: Dict[str, Any] = {}
-        for name, letter in (("FD1", self.cfg.left), ("FD2", self.cfg.right)):
-            real[name] = GwBackend(letter, self.cfg.format, board=board,
-                                   cyl_offset=self.cfg.offsets.get(letter, 0))
-        return real, board.close
+    def refresh_probe(self) -> None:
+        if self.running:
+            return
+        try:
+            self.probe = probe_drives(self.cfg)
+            self.probe_error = ""
+        except Exception as e:
+            self.probe = {}
+            self.probe_error = str(e)
 
-    def start_loaded(self) -> str:
+    def state(self) -> Dict[str, Any]:
+        self.last_seen = time.monotonic()
+        self.seen_once = True
+        if self.message == "starting" and self.ready:
+            self.message = "running"
+        cfg = self.cfg
+        ext = EXT[cfg.format]
+        board = None if self.running else board_port()
+        where = self.where
+        drives: Dict[str, Any] = {}
+        for name in SLOTS:
+            letter = cfg.letter(name)
+            image = cfg.images.get(name, "")
+            info: Dict[str, Any] = {"drive": letter, "side": "left" if name == "FD1" else "right",
+                                    "file": cmd_path(where, name + ext),
+                                    "image": image, "image_name": os.path.basename(image) if image else ""}
+            if image:
+                info.update({"disk": os.path.isfile(image), "protected": not os.access(image, os.W_OK),
+                             "label": disk_label(image)})
+            elif self.bridge.running:
+                info.update(self.bridge.slots.get(name, {}))
+                if self.bridge.ready and info.get("disk"):
+                    info["label"] = disk_label(str(info["file"]))
+            elif letter in self.probe:
+                info.update(self.probe[letter])
+            drives[name] = info
+        emu = find_retroarch()
+        needs_driver = not self.all_images
+        return {
+            "app": APP_NAME, "version": VERSION, "system": SYSTEM,
+            "board": {"present": self.running or board is not None, "port": board},
+            "driver": {"ok": self.driver_ok, "needed": needs_driver,
+                       "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},
+            "running": self.running, "ready": self.ready, "error": self.bridge.error if self.files is None else "",
+            "identified": cfg.left in ("A", "B"),
+            "mountpoint": where, "play": cmd_path(where, "play.cmd"),
+            "drives": drives, "probe_error": self.probe_error,
+            "library": {"folder": self.library, "images": list_library(self.library, ext)},
+            "emulator": {"found": emu is not None, "custom": bool(cfg.emulator_command.strip()),
+                         "name": "RetroArch, Neko Project II kai core" if emu else ""},
+            "log": sorted(list(self.bridge.log) + list(self.events))[-60:], "message": self.message,
+            "job": self.job,
+            "config": asdict(cfg),
+        }
+
+    # actions
+    def start(self) -> str:
         if self.running:
             return "already running"
-        try:
-            backends, closer = self._backends()
-        except Exception as e:
-            return f"can't open the drives: {e}"
+        for name in SLOTS:
+            img = self.cfg.images.get(name)
+            if img and not os.path.isfile(img):
+                return f"{name}: the image {os.path.basename(img)} is missing"
+        self.events.clear()
+        if self.all_images:
+            self.files = ImagePlay(self.cfg, self.note)
+            msg = self.files.start()
+            if msg != "starting":
+                self.files.stop()
+                self.files = None
+            return msg
+        if not self.cfg.left:
+            return "identify the left drive first"
+        if not self.driver_ok:
+            return driver_hint()
+        if not board_port():
+            return "the Greaseweazle isn't connected"
         self.probe = {}
-        self.mode = "loaded"
-        self.loaded = LoadedDrives(self.cfg.folder, self.cfg.format, self.library, self.note)
-        self.loaded.start(backends, closer)
-        return "reading the disks"
+        return self.bridge.start(self.cfg)
 
-    def stop_loaded(self) -> str:
-        if self.loaded is None:
-            return "not running"
-        ok = self.loaded.stop()
-        self.loaded.remove_files()
-        self.loaded = None
-        self.mode = ""
+    def stop(self) -> str:
+        if self.files is not None:
+            msg = self.files.stop()
+            self.files = None
+        else:
+            msg = self.bridge.stop(self.cfg.mountpoint)
         self.refresh_probe()
-        return "stopped" if ok else "stopped WITH UNSAVED CHANGES"
+        return msg
+
+    def identify(self) -> Dict[str, Any]:
+        """The user has put a disk in the LEFT drive only: whichever unit holds a disk is left."""
+        if self.running:
+            return {"ok": False, "message": "stop first"}
+        try:
+            probe = probe_drives(self.cfg)
+        except Exception as e:
+            return {"ok": False, "message": f"couldn't talk to the drives: {e}"}
+        self.probe = probe
+        with_disk = [k for k, v in probe.items() if v["disk"]]
+        if len(with_disk) != 1:
+            return {"ok": False, "message": "no disk found" if not with_disk else
+                    "both drives hold a disk; leave only the left one in"}
+        self.cfg.left = with_disk[0]
+        self.cfg.save()
+        return {"ok": True, "message": f"the left drive is unit {self.cfg.left}; the right one is {self.cfg.right}"}
+
+    def settings(self, data: Dict[str, Any]) -> str:
+        if "emulator_command" in data:
+            self.cfg.emulator_command = str(data["emulator_command"])
+        if data.get("swap"):
+            self.cfg.left = self.cfg.right
+        if data.get("left") in ("A", "B"):             # for people who already know their ribbon
+            self.cfg.left = str(data["left"])
+        if "format" in data and data["format"] in EXT:
+            self.cfg.format = str(data["format"])
+        if isinstance(data.get("image"), dict):
+            if self.running:
+                return "stop before changing what a drive plays from"
+            for name, value in data["image"].items():
+                if name not in SLOTS:
+                    continue
+                value = str(value or "")
+                if value and not os.path.isabs(value):
+                    value = os.path.join(self.library, value)
+                if value and not os.path.isfile(value):
+                    return f"{os.path.basename(value)} isn't in the library"
+                if value:
+                    self.cfg.images[name] = value
+                else:
+                    self.cfg.images.pop(name, None)
+        self.cfg.save()
+        return "saved"
 
     def backup(self, name: str) -> str:
         """Read the whole disk in FD1 or FD2 into an image file, once, track by track."""
+        if self.cfg.images.get(name):
+            return f"{name} is playing from an image already"
         if self.running:
             return "stop first"
         if self.job and not self.job.get("done"):
             return "a backup is already running"
-        letter = {"FD1": self.cfg.left, "FD2": self.cfg.right}.get(name, "")
+        letter = self.cfg.letter(name)
         if letter not in ("A", "B"):
             return "identify the left drive first"
         self.job = {"name": name, "track": 0, "total": 0, "bad": [], "done": False, "error": "", "file": ""}
@@ -435,7 +627,7 @@ class Station:
                                 job["bad"].append(f"{cyl}.{head}")
                                 data = b"\0" * be.track_bytes
                             if cyl == 0 and head == 0:
-                                label = label_from(data)
+                                label = label_of(data)
                             chunks.append(data)
                             job["track"] = cyl * be.heads + head + 1
                     path = store_image(self.library, b"".join(chunks), label, ext)
@@ -451,114 +643,6 @@ class Station:
             self.note(f"{name}: backup failed: {e}")
         job["done"] = True
         self.refresh_probe()
-
-    def refresh_probe(self) -> None:
-        if self.running or TEST_IMAGES:
-            return
-        try:
-            self.probe = probe_drives(self.cfg)
-            self.probe_error = ""
-        except Exception as e:
-            self.probe = {}
-            self.probe_error = str(e)
-
-    def state(self) -> Dict[str, Any]:
-        self.last_seen = time.monotonic()
-        self.seen_once = True
-        if self.message in ("starting", "reading the disks") and self.ready:
-            self.message = "running"
-        cfg = self.cfg
-        ext = EXT[cfg.format]
-        board = None if self.running else board_port()
-        where = self.where
-        drives: Dict[str, Any] = {}
-        loaded_state = self.loaded.state() if self.loaded is not None else {}
-        for name, letter in (("FD1", cfg.left), ("FD2", cfg.right)):
-            info: Dict[str, Any] = {"drive": letter, "side": "left" if name == "FD1" else "right",
-                                    "file": cmd_path(where, name + ext)}
-            if self.loaded is not None:
-                ls = loaded_state.get(name, {})
-                info.update({"disk": ls.get("phase") != "error" or ls.get("error") != "no disk",
-                             "protected": ls.get("protected", False), "label": ls.get("label", ""),
-                             "loading": ls})
-            elif self.bridge.running:
-                info.update(self.bridge.slots.get(name, {}))
-                if self.bridge.ready and info.get("disk"):
-                    info["label"] = disk_label(str(info["file"]))
-            elif letter in self.probe:
-                info.update(self.probe[letter])
-            drives[name] = info
-        emu = find_retroarch()
-        return {
-            "app": APP_NAME, "version": VERSION,
-            "system": SYSTEM,
-            "board": {"present": self.running or board is not None, "port": board},
-            "driver": {"ok": self.driver_ok, "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},
-            "running": self.running, "ready": self.ready, "mode": self.mode,
-            "error": self.bridge.error if self.mode == "live" else "",
-            "identified": cfg.left in ("A", "B"),
-            "mountpoint": where, "play": cmd_path(where, "play.cmd"),
-            "drives": drives, "probe_error": self.probe_error,
-            "emulator": {"found": emu is not None, "custom": bool(cfg.emulator_command.strip()),
-                         "name": "RetroArch, Neko Project II kai core" if emu else ""},
-            "log": sorted(list(self.bridge.log) + list(self.events))[-60:], "message": self.message,
-            "job": self.job, "backup_dir": self.library,
-            "config": asdict(cfg),
-        }
-
-    # actions
-    def start(self, mode: str = "live") -> str:
-        if self.running:
-            return "already running"
-        if not TEST_IMAGES:
-            if not self.cfg.left:
-                return "identify the left drive first"
-            if not board_port():
-                return "the Greaseweazle isn't connected"
-        if mode == "loaded":
-            return self.start_loaded()
-        if not self.driver_ok:
-            return driver_hint()
-        self.probe = {}
-        self.mode = "live"
-        return self.bridge.start(self.cfg)
-
-    def stop(self) -> str:
-        if self.loaded is not None:
-            return self.stop_loaded()
-        msg = self.bridge.stop(self.cfg.mountpoint)
-        self.mode = ""
-        self.refresh_probe()
-        return msg
-
-    def identify(self) -> Dict[str, Any]:
-        """The user has put a disk in the LEFT drive only: whichever unit holds a disk is left."""
-        if self.running:
-            return {"ok": False, "message": "stop first"}
-        try:
-            probe = probe_drives(self.cfg)
-        except Exception as e:
-            return {"ok": False, "message": f"couldn't talk to the drives: {e}"}
-        self.probe = probe
-        with_disk = [k for k, v in probe.items() if v["disk"]]
-        if len(with_disk) != 1:
-            return {"ok": False, "message": "no disk found" if not with_disk else
-                    "both drives hold a disk; leave only the left one in"}
-        self.cfg.left = with_disk[0]
-        self.cfg.save()
-        return {"ok": True, "message": f"the left drive is unit {self.cfg.left}; the right one is {self.cfg.right}"}
-
-    def settings(self, data: Dict[str, Any]) -> str:
-        if "emulator_command" in data:
-            self.cfg.emulator_command = str(data["emulator_command"])
-        if data.get("swap"):
-            self.cfg.left = self.cfg.right
-        if data.get("left") in ("A", "B"):             # for people who already know their ribbon
-            self.cfg.left = str(data["left"])
-        if "format" in data and data["format"] in GEOMETRY:
-            self.cfg.format = str(data["format"])
-        self.cfg.save()
-        return "saved"
 
 
 def make_handler(st: Station) -> type:
@@ -618,7 +702,7 @@ def make_handler(st: Station) -> type:
                 self._json({"message": "bye"})
                 return
             if path == "/api/start":
-                st.message = st.start(str(data.get("mode", "live")))
+                st.message = st.start()
             elif path == "/api/stop":
                 st.message = st.stop()
             elif path == "/api/identify":
@@ -733,7 +817,7 @@ def _gtk_webkit_available() -> bool:
         return False
 
 
-def make_tray(st: "Station", on_open: Callable[[], None], on_quit: Callable[[], None]) -> Optional[Any]:
+def make_tray(st: Station, on_open: Callable[[], None], on_quit: Callable[[], None]) -> Optional[Any]:
     """A tray icon with Open / Start or Stop / Play / Quit, where the desktop can show one.
     Windows and desktops with an app-indicator service can; a Wayland desktop without that
     service, such as the Steam Deck's, cannot, and macOS is left to its window for now."""
@@ -752,7 +836,7 @@ def make_tray(st: "Station", on_open: Callable[[], None], on_quit: Callable[[], 
         return None
 
     def toggle(icon: Any, item: Any) -> None:
-        st.message = st.stop() if st.running else st.start("live" if st.driver_ok else "loaded")
+        st.message = st.stop() if st.running else st.start()
 
     def play(icon: Any, item: Any) -> None:
         st.message = launch_emulator(st.cfg, st.where)
@@ -822,7 +906,7 @@ def serve(show: str) -> int:
 
     def watch_page() -> None:
         # The page asks for the state every second and says goodbye when it closes. Without a
-        # tray, the program ends when the page has gone and the bridge isn't running. A browser
+        # tray, the program ends when the page has gone and nothing is running. A browser
         # slows a hidden tab's timers right down, so the fallback wait is generous.
         while not tray:
             time.sleep(2)

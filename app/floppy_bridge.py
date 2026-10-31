@@ -284,14 +284,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     board: Optional[GwBoard] = None
     slots: Dict[str, Slot] = {}
     try:
-        if images:
-            cyls, heads, tb = GEOMETRY[args.format]
-            backends: Dict[str, Backend] = {n: ImageBackend(p, cyls, heads, tb) for n, p in images.items()}
-        else:
-            board = GwBoard(args.port)
-            offsets = {d.upper(): int(n) for d, n in (o.split("=", 1) for o in args.offset)}
-            backends = {n: GwBackend(d, args.format, board=board, cyl_offset=offsets.get(d, 0))
-                        for n, d in wanted.items() if d != "NONE"}
+        # Each slot is a drive or an image file; they can be mixed.
+        cyls, heads, tb = GEOMETRY[args.format]
+        offsets = {d.upper(): int(n) for d, n in (o.split("=", 1) for o in args.offset)}
+        backends: Dict[str, Backend] = {}
+        for name in ("FD1", "FD2"):
+            if name in images:
+                img = ImageBackend(images[name], cyls, heads, tb)
+                img.readonly = not os.access(images[name], os.W_OK)
+                backends[name] = img
+            elif wanted[name] != "NONE":
+                if board is None:
+                    board = GwBoard(args.port)
+                backends[name] = GwBackend(wanted[name], args.format, board=board,
+                                           cyl_offset=offsets.get(wanted[name], 0))
         for name, backend in backends.items():
             slot = Slot(name, backend, TrackDisk(backend))
             slot.protected = backend.write_protected()

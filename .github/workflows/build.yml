@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install mypy mfusepy pywebview pystray types-pyserial "git+https://github.com/keirf/greaseweazle@latest"
       - name: Types
-        run: python -m mypy --strict --ignore-missing-imports --allow-untyped-calls --allow-subclassing-any bridge_paths.py floppy_drive.py floppy_bridge.py station.py
+        run: python -m mypy --strict --ignore-missing-imports --allow-untyped-calls --allow-subclassing-any bridge_paths.py floppy_drive.py floppy_bridge.py station.py test_drive.py test_bridge.py test_station.py
       - name: Disk layer tests
         run: python test_drive.py
       - name: Bridge test on image files

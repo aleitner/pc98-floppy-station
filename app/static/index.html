@@ -38,7 +38,7 @@ h2 small { font-family: var(--mono); font-size: 15px; color: var(--green); margi
 .drive .state b.lock { color: var(--yellow); }
 .drive .state b.lbl { color: #fff; }
 .drive .state b.bad { color: var(--red); }
-#startrow .big { font-size: 24px; }
+select.small { font: inherit; font-family: var(--mono); font-size: 15px; background: var(--field-deep); color: var(--ink); border: 2px solid var(--frame); padding: 2px 6px; }
 .path { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; min-width: 0; }
 .path .job { color: var(--ink-dim); font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--field-deep); padding: 2px 8px; color: #fff; }
@@ -82,7 +82,7 @@ a { color: var(--cyan); }
 </div>
 
 <div id="driverbox" class="box" hidden>
-  <p><strong>Play from disk</strong> needs a disk driver, which isn't installed. <strong>Load into memory</strong> works without it. <span id="driverhint"></span></p>
+  <p>Playing from the drives needs a disk driver, which isn't installed. Playing from backups works without it. <span id="driverhint"></span></p>
   <div class="row"><button type="button" class="small" data-post="/api/driver">Check again</button></div>
 </div>
 
@@ -100,13 +100,8 @@ a { color: var(--cyan); }
     <h2>Bridge <small>ブリッジ</small></h2>
     <p class="line">Greaseweazle: <b id="board"></b></p>
     <p class="line">Bridge: <b id="bstate"></b></p>
-    <div class="row" id="startrow">
-      <button type="button" class="big" id="startlive">PLAY FROM DISK</button>
-      <button type="button" class="big" id="startloaded">LOAD INTO MEMORY</button>
-      <button type="button" class="big" id="stop" hidden>STOP</button>
-    </div>
-    <p class="msg" id="msg"></p>
-    <p class="note" id="modenote">Play from disk: the game reads the real floppy as it goes. Load into memory: each disk is read in first (about two minutes), then played from memory; saves still go back to the floppy. Start before the emulator.</p>
+    <div class="row"><button type="button" class="big" id="startstop">START</button><span class="msg" id="msg"></span></div>
+    <p class="note">Start before the emulator. Stop writes anything still pending.</p>
 
     <h2 style="margin-top:14px">Emulator <small>エミュレータ</small></h2>
     <p class="line" id="emuline"></p>
@@ -140,20 +135,23 @@ a { color: var(--cyan); }
   }
   function drive(el, name, d, running) {
     var state;
-    if (!S.identified) state = '<b class="off">unit not yet identified</b>';
+    if (d.image) state = (d.disk ? '<b>image</b>' : '<b class="bad">image missing</b>') + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>') + (d.label ? ' <b class="lbl">\u00b7 ' + esc(d.label) + '</b>' : '');
+    else if (!S.identified) state = '<b class="off">unit not yet identified</b>';
     else if (d.disk === undefined) state = '<b class="off">unit ' + esc(d.drive) + '</b>';
     else if (!d.disk) state = '<b class="off">unit ' + esc(d.drive) + ' \u00b7 no disk</b>';
     else state = '<b>unit ' + esc(d.drive) + ' \u00b7 disk in</b>' + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>') + (d.label ? ' <b class="lbl">\u00b7 ' + esc(d.label) + '</b>' : '');
-    if (d.loading) {
-      var l = d.loading;
-      if (l.phase === "reading" || l.phase === "swapped") state += ' <b class="lock">\u00b7 reading track ' + l.track + ' of ' + l.total + '</b>';
-      else if (l.phase === "error") state = '<b class="off">unit ' + esc(d.drive) + '</b> <b class="bad">\u00b7 ' + esc(l.error) + '</b>';
-      else state += ' <b>\u00b7 in memory</b>';
-    }
+
     el.innerHTML = '<span class="name">' + name + '</span><span class="side">' + d.side.toUpperCase() + ' drive</span>' +
       '<span class="state">' + state + '</span>' +
       '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>' +
-      '<span class="path"><button type="button" class="small" data-backup="' + name + '"' + (canBackup(d) ? '' : ' disabled') + '>Back up this disk</button><span class="job">' + jobText(name) + '</span></span>';
+      (d.image
+        ? '<span class="path"><button type="button" class="small" data-usedrive="' + name + '"' + (S.running ? ' disabled' : '') + '>Use the drive</button><span class="job">playing from ' + esc(d.image_name) + '</span></span>'
+        : '<span class="path"><button type="button" class="small" data-backup="' + name + '"' + (canBackup(d) ? '' : ' disabled') + '>Back up this disk</button>' + imageSelect(name) + '<span class="job">' + jobText(name) + '</span></span>');
+  }
+  function imageSelect(name) {
+    if (!S.library.images.length) return '';
+    var opts = '<option value="">Use a backup instead\u2026</option>' + S.library.images.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+    return '<select class="small" data-useimage="' + name + '"' + (S.running ? ' disabled' : '') + '>' + opts + '</select>';
   }
   function canBackup(d) { return !S.running && S.identified && d.disk && !(S.job.name && !S.job.done); }
   function jobText(name) {
@@ -165,22 +163,21 @@ a { color: var(--cyan); }
   function render() {
     $("sys").textContent = S.system + " \u00b7 " + (S.board.port || (S.running ? "in use by the bridge" : "no board"));
     $("setup").hidden = S.identified;
-    $("driverbox").hidden = S.driver.ok;
     $("driverhint").textContent = S.driver.hint + (S.driver.detail ? " (" + S.driver.detail + ")" : "");
     drive($("fd1"), "FD1", S.drives.FD1, S.running);
     drive($("fd2"), "FD2", S.drives.FD2, S.running);
     $("board").textContent = S.board.present ? (S.running ? "connected, in use" : "connected on " + S.board.port) : "not found";
     $("board").className = S.board.present ? "" : "bad";
     var b = $("bstate");
-    if (S.running && S.ready) { b.textContent = (S.mode === "loaded" ? "in memory" : "live") + ", files in " + S.mountpoint; b.className = ""; }
-    else if (S.running) { b.textContent = S.mode === "loaded" ? "reading the disks" : "starting"; b.className = ""; }
+    if (S.running && S.ready) { b.textContent = "running, files in " + S.mountpoint; b.className = ""; }
+    else if (S.running) { b.textContent = "starting"; b.className = ""; }
     else if (S.error) { b.textContent = "stopped: " + S.error; b.className = "bad"; }
     else { b.textContent = "stopped"; b.className = "off"; }
-    var can = S.identified && S.board.present;
-    $("startlive").hidden = S.running; $("startloaded").hidden = S.running; $("stop").hidden = !S.running;
-    $("startlive").disabled = !can || !S.driver.ok;
-    $("startloaded").disabled = !can;
-    $("modenote").hidden = S.running;
+    var ss = $("startstop");
+    ss.textContent = S.running ? "STOP" : "START";
+    var allImages = !!(S.drives.FD1.image && S.drives.FD2.image);
+    ss.disabled = !S.running && !allImages && (!S.identified || !S.driver.ok || !S.board.present);
+    $("driverbox").hidden = S.driver.ok || allImages;
     $("probe").disabled = S.running;
     $("swap").disabled = S.running || !S.identified;
     $("emuline").innerHTML = S.emulator.custom ? "your own command" :
@@ -207,14 +204,17 @@ a { color: var(--cyan); }
       navigator.clipboard.writeText(t.dataset.copy).then(function () { t.textContent = "Copied"; setTimeout(function () { t.textContent = label; }, 1200); },
                                                           function () { t.textContent = "Select it"; setTimeout(function () { t.textContent = label; }, 1200); });
     }
-    else if (t.id === "startlive") { $("msg").textContent = "starting"; post("/api/start", { mode: "live" }); }
-    else if (t.id === "startloaded") { $("msg").textContent = "reading the disks"; post("/api/start", { mode: "loaded" }); }
-    else if (t.id === "stop") { $("msg").textContent = "stopping"; post("/api/stop"); }
+    else if (t.id === "startstop") { $("msg").textContent = S.running ? "stopping" : "starting"; post(S.running ? "/api/stop" : "/api/start"); }
+    else if (t.dataset.usedrive) { var im = {}; im[t.dataset.usedrive] = ""; post("/api/settings", { image: im }); }
     else if (t.id === "play") { post("/api/launch"); }
     else if (t.dataset.backup) { post("/api/backup", { name: t.dataset.backup }); }
     else if (t.id === "identify") { $("identmsg").textContent = "checking"; post("/api/identify").then(function (j) { $("identmsg").textContent = j.message || ""; }); }
     else if (t.id === "swap") { post("/api/settings", { swap: true }); }
     else if (t.id === "savecmd") { post("/api/settings", { emulator_command: $("emucmd").value }); }
+  });
+  document.addEventListener("change", function (e) {
+    var sel = e.target.closest("select[data-useimage]"); if (!sel || !sel.value) return;
+    var im = {}; im[sel.dataset.useimage] = sel.value; post("/api/settings", { image: im });
   });
   window.addEventListener("pagehide", function () {
     try { navigator.sendBeacon("/api/bye", new Blob([JSON.stringify({ token: TOKEN })], { type: "application/json" })); } catch (e) {}
