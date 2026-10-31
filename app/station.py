@@ -7,7 +7,8 @@ emulator opens, and a Play button when RetroArch with the PC-98 core is installe
 The bridge itself runs as a child process (floppy_bridge.py), so a drive fault can never
 take the window down. Settings live in the user's config folder.
 
-    station.py                 open the window
+    station.py                 open the window (its own window where the system allows,
+                               otherwise a bare browser window, otherwise a browser tab)
     station.py --no-browser    serve only; open http://127.0.0.1:9801 yourself
     station.py --bridge ...    run the bridge (used internally when packaged)
 """
@@ -281,6 +282,18 @@ def launch_emulator(cfg: Config) -> str:
     return "emulator started"
 
 
+def disk_label(path: str) -> str:
+    """What the disk calls itself: the maker field of its boot sector, where PC-98 games
+    usually put their name and disk number (e.g. "Xak2-No1"). Read through the bridge."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(16)[3:11]
+    except OSError:
+        return ""
+    text = raw.decode("ascii", "replace").strip("\0 ")
+    return text if text.isprintable() and text else ""
+
+
 # -- the local web app ----------------------------------------------------------------
 class Station:
     def __init__(self) -> None:
@@ -293,6 +306,7 @@ class Station:
         self.message = ""
         self.last_seen = 0.0           # when the page last asked for the state
         self.seen_once = False
+        self.page_gone = 0.0           # when the page said goodbye (window closed)
 
     def refresh_probe(self) -> None:
         if self.bridge.running:
@@ -318,11 +332,14 @@ class Station:
                                     "file": cmd_path(cfg.mountpoint, name + ext)}
             if self.bridge.running:
                 info.update(self.bridge.slots.get(name, {}))
+                if self.bridge.ready and info.get("disk"):
+                    info["label"] = disk_label(str(info["file"]))
             elif letter in self.probe:
                 info.update(self.probe[letter])
             drives[name] = info
         emu = find_retroarch()
         return {
+            "app": APP_NAME,
             "system": SYSTEM,
             "board": {"present": self.bridge.running or board is not None, "port": board},
             "driver": {"ok": self.driver_ok, "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},
@@ -425,12 +442,19 @@ def make_handler(st: Station) -> type:
                 self.send_error(404)
 
         def do_POST(self) -> None:
-            if self.headers.get("X-Token") != st.token:
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                data: Dict[str, Any] = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            except ValueError:
+                data = {}
+            if st.token not in (self.headers.get("X-Token"), data.get("token")):
                 self.send_error(403)
                 return
-            n = int(self.headers.get("Content-Length") or 0)
-            data: Dict[str, Any] = json.loads(self.rfile.read(n) or b"{}") if n else {}
             path = urlparse(self.path).path
+            if path == "/api/bye":                      # sent by the page as it closes
+                st.page_gone = time.monotonic()
+                self._json({"message": "bye"})
+                return
             if path == "/api/start":
                 st.message = st.start()
             elif path == "/api/stop":
@@ -466,24 +490,120 @@ def free_port(preferred: int) -> int:
     return preferred
 
 
-def serve(open_browser: bool) -> int:
+# -- the window -----------------------------------------------------------------------
+def existing_instance(port: int) -> Optional[str]:
+    """The address of a Floppy Station already running on this machine, if any."""
+    import urllib.request
+    url = f"http://127.0.0.1:{port}/"
+    try:
+        with urllib.request.urlopen(url + "api/state", timeout=2) as r:
+            data = json.loads(r.read())
+        return url if data.get("app") == APP_NAME else None
+    except Exception:
+        return None
+
+
+def app_mode_browser() -> Optional[List[str]]:
+    """A Chromium-family browser that can open a page as a plain window, without tabs or bars."""
+    home = os.path.expanduser("~")
+    names = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "brave-browser",
+             "brave", "microsoft-edge", "microsoft-edge-stable", "vivaldi"]
+    if SYSTEM == "Windows":
+        local = os.environ.get("LOCALAPPDATA", "")
+        for exe in (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                    os.path.join(local, r"Google\Chrome\Application\chrome.exe")):
+            if os.path.isfile(exe):
+                return [exe]
+    elif SYSTEM == "Darwin":
+        for app in ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"):
+            if os.path.isfile(app):
+                return [app]
+    for n in names:
+        found = shutil.which(n)
+        if found:
+            return [found]
+    if SYSTEM == "Linux" and shutil.which("flatpak"):
+        for fid in ("com.google.Chrome", "org.chromium.Chromium", "com.brave.Browser", "com.microsoft.Edge"):
+            for base in (os.path.join(home, ".local/share/flatpak/app"), "/var/lib/flatpak/app"):
+                if os.path.isdir(os.path.join(base, fid)):
+                    return ["flatpak", "run", fid]
+    return None
+
+
+def open_window(url: str) -> str:
+    """Show the page. Best: the system's own web engine in a window of ours (pywebview).
+    Next: a Chromium-family browser in app mode, which is a bare window. Last: a browser tab.
+    Returns which one happened; "webview" means the caller must run webview.start() itself."""
+    try:
+        import webview  # noqa: F401
+        if SYSTEM != "Linux" or _gtk_webkit_available():
+            return "webview"
+    except Exception:
+        pass
+    cmd = app_mode_browser()
+    if cmd:
+        try:
+            subprocess.Popen(cmd + [f"--app={url}", "--window-size=1040,980"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=(SYSTEM != "Windows"))
+            return "app"
+        except OSError:
+            pass
+    webbrowser.open(url)
+    return "browser"
+
+
+def _gtk_webkit_available() -> bool:
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("WebKit2", "4.1")
+        from gi.repository import Gtk, WebKit2  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def serve(show: str) -> int:
+    """show: 'window' opens the page in a window, 'none' only serves (prints the address)."""
     st = Station()
     threading.Thread(target=st.refresh_probe, daemon=True).start()
     port = free_port(PORT)
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(st))
     url = f"http://127.0.0.1:{port}/"
     print(f"{APP_NAME}: {url}", flush=True)
-    if open_browser:
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    def finish() -> None:
+        if st.bridge.running:
+            st.bridge.stop(st.cfg.mountpoint)
+
+    mode = open_window(url) if show == "window" else "none"
+    if mode == "webview":
+        import webview
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        webview.create_window(APP_NAME, url, width=1040, height=980, background_color="#1414b4")
+        webview.start()                       # returns when the window is closed
+        finish()
+        httpd.shutdown()
+        return 0
 
     def watch_page() -> None:
-        # The page asks for the state every second. When it has gone for a while and the
-        # bridge isn't running, the window was closed: end the program. Browsers slow a
-        # hidden tab's timers right down, so the wait is generous.
+        # The page asks for the state every second and says goodbye when it closes. When it
+        # has gone and the bridge isn't running, end the program. A browser slows a hidden
+        # tab's timers right down, so the fallback wait is generous.
         while True:
-            time.sleep(5)
-            idle = time.monotonic() - st.last_seen
-            if st.seen_once and not st.bridge.running and idle > 150:
+            time.sleep(2)
+            if st.bridge.running:
+                continue
+            now = time.monotonic()
+            said_bye = st.page_gone and now - st.page_gone > 3 and st.last_seen < st.page_gone
+            quiet = st.seen_once and now - st.last_seen > 150
+            if said_bye or quiet:
                 httpd.shutdown()
                 return
     threading.Thread(target=watch_page, daemon=True).start()
@@ -492,8 +612,7 @@ def serve(open_browser: bool) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        if st.bridge.running:
-            st.bridge.stop(st.cfg.mountpoint)
+        finish()
     return 0
 
 
@@ -510,7 +629,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         print("ok")
         return 0
-    return serve(open_browser="--no-browser" not in args)
+    if "--no-browser" in args:
+        return serve("none")
+    running = existing_instance(PORT)
+    if running:                               # one program, one window: just show it again
+        if open_window(running) == "webview":
+            import webview
+            webview.create_window(APP_NAME, running, width=1040, height=980, background_color="#1414b4")
+            webview.start()
+        return 0
+    return serve("window")
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ h2 small { font-family: var(--mono); font-size: 15px; color: var(--green); margi
 .drive .state b { font-weight: 400; color: var(--green); }
 .drive .state b.off { color: var(--ink-dim); }
 .drive .state b.lock { color: var(--yellow); }
+.drive .state b.lbl { color: #fff; }
 .path { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; min-width: 0; }
 .path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--field-deep); padding: 2px 8px; color: #fff; }
 button { font: inherit; font-family: var(--mono); color: var(--ink); background: var(--field-deep); border: 2px solid var(--frame); padding: 6px 16px; cursor: pointer; }
@@ -113,7 +114,7 @@ a { color: var(--cyan); }
 <h2 style="margin-top:16px">Log <small>ログ</small></h2>
 <pre class="log" id="log"></pre>
 
-<footer><span class="cur" id="ready">READY</span><span id="files"></span><span>Stop the bridge, then close this window; the program ends by itself.</span></footer>
+<footer><span class="cur" id="ready">READY</span><span id="files"></span><span>Closing this window ends the program once the bridge is stopped.</span></footer>
 </div></div>
 
 <script>
@@ -135,7 +136,7 @@ a { color: var(--cyan); }
     if (!S.identified) state = '<b class="off">unit not yet identified</b>';
     else if (d.disk === undefined) state = '<b class="off">unit ' + esc(d.drive) + '</b>';
     else if (!d.disk) state = '<b class="off">unit ' + esc(d.drive) + ' \u00b7 no disk</b>';
-    else state = '<b>unit ' + esc(d.drive) + ' \u00b7 disk in</b>' + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>');
+    else state = '<b>unit ' + esc(d.drive) + ' \u00b7 disk in</b>' + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>') + (d.label ? ' <b class="lbl">\u00b7 ' + esc(d.label) + '</b>' : '');
     el.innerHTML = '<span class="name">' + name + '</span><span class="side">' + d.side.toUpperCase() + ' drive</span>' +
       '<span class="state">' + state + '</span>' +
       '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>';
@@ -187,6 +188,9 @@ a { color: var(--cyan); }
     else if (t.id === "identify") { $("identmsg").textContent = "checking"; post("/api/identify").then(function (j) { $("identmsg").textContent = j.message || ""; }); }
     else if (t.id === "swap") { post("/api/settings", { swap: true }); }
     else if (t.id === "savecmd") { post("/api/settings", { emulator_command: $("emucmd").value }); }
+  });
+  window.addEventListener("pagehide", function () {
+    try { navigator.sendBeacon("/api/bye", new Blob([JSON.stringify({ token: TOKEN })], { type: "application/json" })); } catch (e) {}
   });
   refresh();
   setInterval(refresh, 1000);
