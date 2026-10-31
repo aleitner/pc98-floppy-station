@@ -318,6 +318,15 @@ python3 app/station.py</code></pre>
     <li><strong>Test on a blank.</strong> Write a full disk and read it back on the same drive, then read it on the other drive. A drive that only reads its own writing has a problem of its own.</li>
     <li><strong>Read an original once.</strong> Make the image, verify it, and put the original away. Play from a copy written to a blank. Tape over the write notch of copies that the game never writes to.</li>
   </ol>
+  <h3>What the software does to protect a disk</h3>
+  <ul>
+    <li>A covered write-protect notch is enforced by the drive itself. The bridge also shows such a disk as a read-only file, so an emulator never tries.</li>
+    <li>The first write to a disk is only accepted after the drive has read the disk's track 0 with the headers the decoder expects. A drive whose home position has slipped fails that test and is refused, instead of writing every track to the wrong place.</li>
+    <li>Every written track is read back. If it doesn't match, the disk is marked broken and no more writes go to it.</li>
+    <li>Changes that haven't reached the disk yet are never written to a disk swapped in underneath them.</li>
+    <li>Backup only reads. The bridge writes only tracks the emulator changed.</li>
+  </ul>
+  <p>What it can't protect against is a dirty or damaged head. That part is the three steps above.</p>
   <p>Check a disk's surface through the window after a test: hold it to the light and turn the hub. A fine ring where there was none is the drive telling you its head is dirty or damaged. Stop using that drive for anything that matters until it passes a clean test again.</p>
   <p>Disks go in label up with the lever open, then close the lever; a drive with a disk upside down reports no disk at all. Keep hands and cables off the big round motor disc on the underside while a disk is spinning: anything touching it slows the disk and corrupts reads.</p>
 </section>

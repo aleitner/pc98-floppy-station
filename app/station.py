@@ -42,6 +42,8 @@ FROZEN = getattr(sys, "frozen", False)
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.join(HERE, "static")
 
+TEST_IMAGES = os.environ.get("PC98_STATION_IMAGES", "")   # "FD1=a.hdm,FD2=b.hdm", tests only
+
 WINFSP_URL = "https://winfsp.dev/rel/"
 FUSET_URL = "https://www.fuse-t.org/"
 NP2KAI_URL = "https://github.com/AZO234/NP2kai"
@@ -158,11 +160,15 @@ class Bridge:
         with self.lock:
             if self.running:
                 return "already running"
-            args = ["--bridge", "--control-stdin", "--fd1", cfg.left, "--fd2", cfg.right,
-                    "--format", cfg.format, "--mountpoint", cfg.mountpoint]
-            for letter, n in cfg.offsets.items():
-                if n:
-                    args += ["--offset", f"{letter}={n}"]
+            args = ["--bridge", "--control-stdin", "--format", cfg.format, "--mountpoint", cfg.mountpoint]
+            if TEST_IMAGES:                      # the test suite stands image files in for drives
+                for pair in TEST_IMAGES.split(","):
+                    args += ["--image", pair]
+            else:
+                args += ["--fd1", cfg.left, "--fd2", cfg.right]
+                for letter, n in cfg.offsets.items():
+                    if n:
+                        args += ["--offset", f"{letter}={n}"]
             self.log.clear()
             self.slots = {}
             self.error = ""
@@ -393,7 +399,7 @@ class Station:
         self.refresh_probe()
 
     def refresh_probe(self) -> None:
-        if self.bridge.running:
+        if self.bridge.running or TEST_IMAGES:
             return
         try:
             self.probe = probe_drives(self.cfg)
@@ -440,12 +446,13 @@ class Station:
 
     # actions
     def start(self) -> str:
-        if not self.cfg.left:
-            return "identify the left drive first"
         if not self.driver_ok:
             return driver_hint()
-        if not board_port():
-            return "the Greaseweazle isn't connected"
+        if not TEST_IMAGES:
+            if not self.cfg.left:
+                return "identify the left drive first"
+            if not board_port():
+                return "the Greaseweazle isn't connected"
         self.probe = {}
         return self.bridge.start(self.cfg)
 

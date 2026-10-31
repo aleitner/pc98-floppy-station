@@ -63,6 +63,24 @@ boots from the real drives and reads correctly from both. Saving back to a disk,
 swaps during play, Windows and macOS have not been tested yet. It includes no
 emulator and no BIOS files; bring your own.
 
+## What protects your disks
+
+- **The notch.** A covered write-protect notch is enforced by the drive itself, in hardware.
+  The bridge also shows such a disk as a read-only file, so an emulator never tries.
+- **No write before track 0 decodes.** The first write to a disk is only accepted after the
+  drive has read the disk's track 0 with the sector headers the decoder expects. A drive
+  whose home position has slipped fails that test and is refused, instead of writing every
+  track to the wrong place.
+- **Every write is verified.** Each track written is read back; if it doesn't match, the disk
+  is marked broken and no more writes go to it.
+- **A swap drops pending writes.** Changes that haven't reached the disk yet are never written
+  to a disk that was swapped in underneath them, and the window says so.
+- **Only what the game writes.** The bridge writes tracks the emulator changed, nothing else.
+  Backup only reads.
+
+What software can't protect against is a dirty or damaged head, which scratches a disk in
+a few passes. That part is on you, below.
+
 ## Before an original disk goes in
 
 Old drives arrive with decades of oxide on their heads, and a dirty head scratches

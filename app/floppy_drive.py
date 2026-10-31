@@ -334,6 +334,7 @@ class TrackDisk(io.RawIOBase):
         self._log = log
         self.last_write = 0.0
         self.broken: Optional[str] = None     # set once the disk is unsafe to write
+        self.verified = False                 # track 0 of this disk has decoded on this drive
 
     # io plumbing ----------------------------------------------------------
     def readable(self) -> bool:
@@ -366,6 +367,8 @@ class TrackDisk(io.RawIOBase):
                 raise DiskError(5, f"can't read track {cyl}.{head}")
             t = bytearray(data)
             self._cache[idx] = t
+            if idx == 0:
+                self.verified = True
         return t
 
     def readinto(self, buf: "memoryview | bytearray") -> int:   # type: ignore[override]
@@ -385,6 +388,16 @@ class TrackDisk(io.RawIOBase):
         with self._lock:
             if self.broken:
                 raise DiskError(5, self.broken)
+            if not self.verified:
+                # Before the first write, track 0 must decode with the sector headers the
+                # decoder expects. That proves this drive's track 0 is the disk's track 0; a
+                # drive whose home position has slipped would otherwise write every track to
+                # the wrong place and ruin the disk for every other drive.
+                try:
+                    self._track(0)
+                except DiskError:
+                    raise DiskError(30, "track 0 can't be read on this drive, so writing is refused "
+                                        "(blank disk, dirty heads, or a drive that has lost its track 0)")
             mv = memoryview(data).cast("B")
             n = min(len(mv), max(0, self.size - self._pos))
             done = 0
@@ -442,6 +455,7 @@ class TrackDisk(io.RawIOBase):
             self._cache.clear()
             self._dirty.clear()
             self.broken = None
+            self.verified = False
             return lost
 
     def close(self) -> None:          # the owner closes the backend explicitly
