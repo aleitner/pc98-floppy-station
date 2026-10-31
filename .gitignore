@@ -46,3 +46,7 @@ app/pc98_floppy.py
 app/pc98_floppy.png
 app/pc98-floppy-station.desktop
 app/floppy_mount.py
+
+# PyInstaller output
+app/build/
+app/dist/
