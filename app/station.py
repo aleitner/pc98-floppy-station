@@ -70,15 +70,11 @@ def documents_dir() -> str:
     if SYSTEM == "Windows":
         try:
             import ctypes
-            from ctypes import wintypes
-            guid = ctypes.c_byte * 16
-            folderid = guid(*bytes.fromhex("D09AD3FDE2C9FC43A0CDCD5E5C0A4B9D").translate(bytes(range(256))))
-            path = ctypes.c_wchar_p()
+            buf = ctypes.create_unicode_buffer(1024)
+            csidl_personal = 5
             shell = ctypes.windll.shell32  # type: ignore[attr-defined]
-            if shell.SHGetKnownFolderPath(ctypes.byref(folderid), 0, None, ctypes.byref(path)) == 0 and path.value:
-                result = str(path.value)
-                ctypes.windll.ole32.CoTaskMemFree(path)  # type: ignore[attr-defined]
-                return result
+            if shell.SHGetFolderPathW(None, csidl_personal, None, 0, buf) == 0 and buf.value:
+                return str(buf.value)
         except Exception:
             pass
     docs = os.path.join(os.path.expanduser("~"), "Documents")
@@ -230,7 +226,8 @@ def board_port(max_age: float = 3.0) -> Optional[str]:
 def driver_check() -> Tuple[bool, str]:
     """Can the FUSE layer be loaded? Runs in a child so a later install is seen without a restart."""
     try:
-        out = subprocess.run(self_command(["--check-driver"]), capture_output=True, text=True, timeout=60)
+        out = subprocess.run(self_command(["--check-driver"]), capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, str(e)
     return out.returncode == 0, out.stdout.strip() or out.stderr.strip()
@@ -300,7 +297,8 @@ class Bridge:
             self.error = ""
             self.ready = False
             self.proc = subprocess.Popen(self_command(args), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, text=True, bufsize=1)
+                                         stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                         encoding="utf-8", errors="replace")
             threading.Thread(target=self._reader, args=(self.proc,), daemon=True).start()
             return "starting"
 
@@ -363,19 +361,16 @@ class Bridge:
                     if self.lines == seen:
                         break                  # nothing for 20 s: it isn't saving, it's stuck
             if SYSTEM != "Windows":
+                # an unmount from outside makes the bridge write what is pending and exit
                 tool = shutil.which("fusermount3") or shutil.which("fusermount")
                 subprocess.run([tool, "-u", mountpoint] if tool else ["umount", mountpoint], check=False)
-            else:
-                fsptool = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-                                       "WinFsp", "bin", "fsptool-x64.exe")
-                if os.path.isfile(fsptool):
-                    subprocess.run([fsptool, "unmount", mountpoint], check=False)
-            try:
-                proc.wait(15)
-                return "stopped"
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-                return "stopped by force; anything unsaved may be lost"
+                try:
+                    proc.wait(15)
+                    return "stopped"
+                except subprocess.TimeoutExpired:
+                    pass
+            proc.terminate()                   # WinFsp drops the volume when the process ends
+            return "stopped by force; anything unsaved may be lost"
 
 
 # -- playing from image files only: plain files, no driver -------------------------------
@@ -1076,8 +1071,10 @@ def make_tray(st: Station, on_open: Callable[[], None], on_quit: Callable[[], No
         return None
 
     def toggle(icon: Any, item: Any) -> None:
-        st.message = st.stop() if st.running else st.start()
-        icon.update_menu()
+        # off the tray's own thread: a stop can take a while when a save is in progress
+        def go() -> None:
+            st.message = st.stop() if st.running else st.start()
+        threading.Thread(target=go, daemon=True).start()
 
     def play(icon: Any, item: Any) -> None:
         st.message = launch_emulator(st.cfg, st.where)
@@ -1209,9 +1206,19 @@ def setup_logging() -> None:
         log.error("uncaught: %s", "".join(traceback.format_exception(exc_type, exc, tb)))
     sys.excepthook = hook
 
+    def thread_hook(args: Any) -> None:
+        log.error("uncaught in thread %s: %s", args.thread.name if args.thread else "?",
+                  "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+    threading.excepthook = thread_hook
+
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] in (["--bridge"], ["--check-driver"]):
+        # the parent reads these as UTF-8 whatever the system code page says
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
     if args[:1] == ["--bridge"]:
         import floppy_bridge                  # needs the FUSE driver; the window itself doesn't
         return floppy_bridge.main(args[1:])

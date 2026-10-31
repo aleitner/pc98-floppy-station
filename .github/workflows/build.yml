@@ -47,12 +47,12 @@ jobs:
           - os: windows-latest
             name: windows
             artifact: dist/pc98-floppy-station.exe
-          - os: macos-14
+          - os: macos-15
             name: macos
             artifact: dist/pc98-floppy-station-macos.zip
-          - os: macos-13
+          - os: macos-15-intel
             name: macos-intel
-            artifact: dist/pc98-floppy-station-macos.zip
+            artifact: dist/pc98-floppy-station-macos-intel.zip
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -73,7 +73,7 @@ jobs:
         run: pyinstaller station.spec
       - name: Zip the Mac app
         if: startsWith(matrix.name, 'macos')
-        run: cd dist && ditto -c -k --keepParent "PC-98 Floppy Station.app" pc98-floppy-station-macos.zip
+        run: cd dist && ditto -c -k --keepParent "PC-98 Floppy Station.app" pc98-floppy-station-${{ matrix.name }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: pc98-floppy-station-${{ matrix.name }}
