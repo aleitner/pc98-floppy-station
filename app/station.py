@@ -1280,9 +1280,9 @@ def serve(show: str) -> int:
         # but polls again within the 3 s, so it doesn't count. If the page just falls silent
         # (a browser slows a hidden tab right down) the program ends only when nothing runs.
         while not tray:
-            time.sleep(2)
+            time.sleep(0.5)
             now = time.monotonic()
-            said_bye = st.page_gone and now - st.page_gone > 3 and st.last_seen < st.page_gone
+            said_bye = st.page_gone and now - st.page_gone > 1.2 and st.last_seen < st.page_gone
             quiet = st.seen_once and now - st.last_seen > 150 and not st.busy
             if said_bye or quiet:
                 httpd.shutdown()
