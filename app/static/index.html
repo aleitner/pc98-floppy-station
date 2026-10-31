@@ -91,7 +91,6 @@ a { color: var(--cyan); }
     <div class="drive" id="fd2"></div>
     <div class="row"><button type="button" class="small" data-post="/api/probe" id="probe">Check disks</button>
       <button type="button" class="small" id="swap">Swap left and right</button></div>
-    <p class="note">A disk with its notch covered is write-protected: the game can read it but never write to it. Leave the notch open only on a save disk.</p>
   </section>
 
   <section class="panel">
@@ -99,7 +98,7 @@ a { color: var(--cyan); }
     <p class="line">Greaseweazle: <b id="board"></b></p>
     <p class="line">Bridge: <b id="bstate"></b></p>
     <div class="row"><button type="button" class="big" id="startstop">START</button><span class="msg" id="msg"></span></div>
-    <p class="note">While it runs, the drives appear as the two files above. Start it before the emulator. Stop it when you're done; it writes anything still pending first.</p>
+    <p class="note">Start before the emulator. Stop writes anything still pending.</p>
 
     <h2 style="margin-top:14px">Emulator <small>エミュレータ</small></h2>
     <p class="line" id="emuline"></p>

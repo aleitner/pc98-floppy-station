@@ -29,7 +29,7 @@ import threading
 import time
 import webbrowser
 from dataclasses import asdict, dataclass, field
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from bridge_paths import EXT, GEOMETRY, cmd_path, default_mountpoint
@@ -569,6 +569,42 @@ def _gtk_webkit_available() -> bool:
         return False
 
 
+def make_tray(st: "Station", on_open: Callable[[], None], on_quit: Callable[[], None]) -> Optional[Any]:
+    """A tray icon with Open / Start or Stop / Play / Quit, where the desktop can show one.
+    Windows and desktops with an app-indicator service can; a Wayland desktop without that
+    service, such as the Steam Deck's, cannot, and macOS is left to its window for now."""
+    if SYSTEM == "Darwin":
+        return None
+    try:
+        import pystray
+        from PIL import Image
+    except Exception:
+        return None
+    if pystray.Icon.__module__.endswith("_xorg"):          # legacy tray: modern desktops ignore it
+        return None
+    try:
+        image = Image.open(os.path.join(HERE, "icon.png"))
+    except OSError:
+        return None
+
+    def toggle(icon: Any, item: Any) -> None:
+        st.message = st.stop() if st.bridge.running else st.start()
+
+    def play(icon: Any, item: Any) -> None:
+        st.message = launch_emulator(st.cfg)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Open", lambda icon, item: on_open(), default=True),
+        pystray.MenuItem(lambda item: "Stop bridge" if st.bridge.running else "Start bridge", toggle),
+        pystray.MenuItem("Play", play, enabled=lambda item: st.bridge.ready),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Quit", lambda icon, item: on_quit()),
+    )
+    icon = pystray.Icon("pc98-floppy-station", image, APP_NAME, menu)
+    threading.Thread(target=icon.run, daemon=True).start()
+    return icon
+
+
 def serve(show: str) -> int:
     """show: 'window' opens the page in a window, 'none' only serves (prints the address)."""
     st = Station()
@@ -577,6 +613,7 @@ def serve(show: str) -> int:
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), make_handler(st))
     url = f"http://127.0.0.1:{port}/"
     print(f"{APP_NAME}: {url}", flush=True)
+    quitting = threading.Event()
 
     def finish() -> None:
         if st.bridge.running:
@@ -586,17 +623,44 @@ def serve(show: str) -> int:
     if mode == "webview":
         import webview
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        webview.create_window(APP_NAME, url, width=1040, height=980, background_color="#1414b4")
-        webview.start()                       # returns when the window is closed
+        window = webview.create_window(APP_NAME, url, width=1040, height=980, background_color="#1414b4")
+        assert window is not None
+
+        def quit_webview() -> None:
+            quitting.set()
+            window.destroy()
+
+        def hide_instead_of_close() -> bool:
+            # With a tray, closing the window only hides it; Quit in the tray ends the program.
+            if quitting.is_set():
+                return True
+            window.hide()
+            return False
+
+        tray = make_tray(st, window.show, quit_webview)
+        if tray:
+            window.events.closing += hide_instead_of_close
+        webview.start()                       # returns when the window is destroyed
+        if tray:
+            tray.stop()
         finish()
         httpd.shutdown()
         return 0
 
+    def reopen() -> None:
+        open_window(url)
+
+    def quit_server() -> None:
+        quitting.set()
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    tray = make_tray(st, reopen, quit_server) if mode != "none" else None
+
     def watch_page() -> None:
-        # The page asks for the state every second and says goodbye when it closes. When it
-        # has gone and the bridge isn't running, end the program. A browser slows a hidden
-        # tab's timers right down, so the fallback wait is generous.
-        while True:
+        # The page asks for the state every second and says goodbye when it closes. Without a
+        # tray, the program ends when the page has gone and the bridge isn't running. A browser
+        # slows a hidden tab's timers right down, so the fallback wait is generous.
+        while not tray:
             time.sleep(2)
             if st.bridge.running:
                 continue
@@ -612,6 +676,8 @@ def serve(show: str) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if tray:
+            tray.stop()
         finish()
     return 0
 

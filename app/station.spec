@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 hidden = collect_submodules("greaseweazle") + collect_submodules("serial")
-datas = collect_data_files("greaseweazle") + [("static", "static")]
+datas = collect_data_files("greaseweazle") + [("static", "static"), ("icon.png", ".")]
 
 a = Analysis(
     ["station.py"],
@@ -17,7 +17,7 @@ a = Analysis(
     hiddenimports=hidden,
     hookspath=[],
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "numpy", "PIL"],
+    excludes=["tkinter", "matplotlib", "numpy"],
     cipher=block_cipher,
     noarchive=False,
 )
