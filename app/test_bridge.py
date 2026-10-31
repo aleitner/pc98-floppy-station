@@ -42,7 +42,8 @@ def main() -> int:
     open(b, "wb").write(db)
     log = open(os.path.join(d, "log"), "w+")
     p = subprocess.Popen([sys.executable, os.path.join(HERE, "floppy_bridge.py"), "--image", f"FD1={a}",
-                          "--image", f"FD2={b}", "--mountpoint", m], stdout=log, stderr=subprocess.STDOUT)
+                          "--image", f"FD2={b}", "--mountpoint", m, "--control-stdin"],
+                         stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT)
     fd1, fd2 = os.path.join(m, "FD1.hdm"), os.path.join(m, "FD2.hdm")
     try:
         check(wait_for(lambda: os.path.exists(fd1)), "files appear")
@@ -96,7 +97,10 @@ def main() -> int:
             f.seek(0)
             f.write(b"LASTSAVE" * 128)
     finally:
-        subprocess.run(["fusermount3", "-u", m], check=False)
+        if sys.platform == "win32":                    # no unmount command there
+            p.communicate(b"stop\n", timeout=10)
+        else:
+            subprocess.run(["fusermount3", "-u", m], check=False)
         try:
             p.wait(10)
         except subprocess.TimeoutExpired:

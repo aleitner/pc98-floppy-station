@@ -264,11 +264,17 @@ def watch_stdin(ops: BridgeFS, mountpoint: str) -> None:
         pass
 
 
-def mount_options(name: str) -> Dict[str, Any]:
+def mount_options(name: str, mountpoint: str) -> Dict[str, Any]:
     """Nothing may be cached by the system: after a swap the same file holds a different disk."""
     if SYSTEM == "Windows":
-        return dict(FileInfoTimeout=0, uid=-1, gid=-1)
-    opts: Dict[str, Any] = dict(fsname=name, direct_io=True, attr_timeout=0, entry_timeout=0)
+        opts: Dict[str, Any] = dict(FileInfoTimeout=0, uid=-1, gid=-1)
+        # As a network volume: on a local one the virus scanner reads the whole file on every
+        # open, which on a real drive means a minute of stepping through the entire floppy.
+        # Only a drive letter can be one; a folder mount stays local and gets those reads.
+        if len(mountpoint) == 2 and mountpoint[1] == ":":
+            opts["VolumePrefix"] = "/pc98/drives"
+        return opts
+    opts = dict(fsname=name, direct_io=True, attr_timeout=0, entry_timeout=0)
     if SYSTEM == "Darwin":
         opts.update(volname="PC98 Drives", noappledouble=True, noapplexattr=True)
     return opts
@@ -344,7 +350,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.control_stdin:
         threading.Thread(target=watch_stdin, args=(ops, mountpoint), daemon=True).start()
     try:
-        mfusepy.FUSE(ops, mountpoint, foreground=True, nothreads=True, **mount_options("pc98drives"))
+        mfusepy.FUSE(ops, mountpoint, foreground=True, nothreads=True, **mount_options("pc98drives", mountpoint))
     except Exception as e:
         status(f"error couldn't mount {mountpoint}: {e}")
         return 2

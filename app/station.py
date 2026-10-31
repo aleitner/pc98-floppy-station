@@ -512,9 +512,11 @@ class Station:
                 info.update({"disk": present, "protected": present and not os.access(image, os.W_OK),
                              "label": disk_label(image) if present else ""})
             elif self.running:
-                info.update(self.bridge.slots.get(name, {}))
-                if self.bridge.ready and info.get("disk"):
-                    info["label"] = disk_label(str(info["file"]))
+                slot = self.bridge.slots.get(name, {})
+                # Once per disk: this reads the real drive, and an unreadable track isn't cached.
+                if self.bridge.ready and slot.get("disk") and "label" not in slot:
+                    slot["label"] = disk_label(str(info["file"]))
+                info.update(slot)
             elif letter in self.probe:
                 info.update(self.probe[letter])
             drives[name] = info

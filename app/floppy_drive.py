@@ -107,6 +107,9 @@ class GwBoard:
         except OSError:
             self.usb.ser.close()
             raise
+        # The board remembers each head's position between programs, and a wrong memory puts
+        # every track off by that much. A reset makes the first seek find track 0 by its sensor.
+        self.usb.power_on_reset()
         self.lock = threading.RLock()
         self.selected: Optional["GwBackend"] = None
 

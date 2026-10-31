@@ -25,6 +25,7 @@ h1 { font-family: var(--display); font-size: 46px; line-height: 1; margin: 0; co
 .kana { color: var(--green); margin: 2px 0 0; font-size: 17px; }
 .sys { color: var(--yellow); font-size: 15px; }
 hr { border: 0; border-top: 2px dashed var(--ink-dim); opacity: .55; margin: 14px 0; }
+a { color: var(--cyan); }
 h2 { font-family: var(--display); font-size: 28px; line-height: 1; color: #fff; margin: 0 0 10px; }
 h2 small { font-family: var(--mono); font-size: 15px; color: var(--green); margin-left: 10px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 28px; }
@@ -167,10 +168,14 @@ a { color: var(--cyan); }
     if (j.error) return "failed: " + esc(j.error);
     return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.library.folder);
   }
+  function link(url, text) { return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>'; }
+  function linked(text) { return esc(text).replace(/https:\/\/\S+\//g, function (u) { return link(u, u); }); }
+  // Redrawing under the pointer would swallow a click on a link.
+  function draw(el, html) { if (el._drawn !== html) { el._drawn = html; el.innerHTML = html; } }
   function render() {
     $("sys").textContent = S.system;
     $("setup").hidden = S.identified;
-    $("driverhint").textContent = S.driver.hint;
+    draw($("driverhint"), linked(S.driver.hint));
     drive($("fd1"), "FD1", S.drives.FD1);
     drive($("fd2"), "FD2", S.drives.FD2);
     $("board").textContent = S.board.present ? (S.board.port ? "connected on " + S.board.port : "connected, in use") : "not found";
@@ -187,8 +192,10 @@ a { color: var(--cyan); }
     $("probe").disabled = S.busy;
     $("swap").disabled = S.busy || !S.identified;
     $("identify").disabled = S.busy;
-    $("emuline").innerHTML = S.emulator.custom ? "your own command" :
-      S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" : '<b class="bad">RetroArch with the PC-98 core not found</b>; open the two files in your emulator';
+    draw($("emuline"), S.emulator.custom ? "your own command" :
+      S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" :
+      '<b class="bad">RetroArch with the PC-98 core not found.</b> Install ' + link("https://www.retroarch.com/?page=platforms", "RetroArch") +
+      ', then add the core "NEC - PC-98 (Neko Project II Kai)" from its Online Updater. Or open the two files in your own emulator.');
     $("play").disabled = !(S.running && S.ready && (S.emulator.found || S.emulator.custom));
     if (document.activeElement !== $("emucmd")) $("emucmd").value = S.config.emulator_command || "";
     var log = $("log"); var atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;

@@ -10,8 +10,8 @@ computer and play PC-98 games in an emulator from the real disks.
 1. **Print:** [`print/`](print/) or [Cults3D](https://cults3d.com/:5146826). Pick one layout, print at 100 %.
 2. **Buy parts:** [PARTS.md](PARTS.md).
 3. **Put together:** [the guide](https://aleitner.github.io/pc98-floppy-station/#build).
-4. **Get the bridge:** [download for Linux](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage). Windows and macOS come once they've been tested on real machines.
-5. **Run:** make the file executable and double-click it. You need RetroArch with the Neko Project II kai core and your own PC-98 BIOS files.
+4. **Get the bridge:** download for [Linux](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage) or [Windows](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-windows.exe). macOS comes once it's been tested on a real machine.
+5. **Run:** on Linux, make the file executable; then double-click it. The window tells you if the disk driver or emulator is missing and where to get them. You need RetroArch with the Neko Project II kai core and your own PC-98 BIOS files.
 
 **Original disks are irreplaceable.** Clean the drive heads first, try a disk you can afford
 to lose, then back up each original once and play from the backup or a copy.

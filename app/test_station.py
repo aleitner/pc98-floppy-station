@@ -17,7 +17,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 
 SIZE = 1232 * 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,7 +49,37 @@ def disk(name: bytes) -> bytes:
     return bytes(body)
 
 
+class Alive:
+    def poll(self) -> None:
+        return None
+
+
+def label_read_once(d: str) -> None:
+    """The window refreshes every second; an unreadable disk must not be read every time."""
+    os.environ.update(XDG_CONFIG_HOME=d, APPDATA=d, HOME=d, USERPROFILE=d)
+    import station
+    reads: List[str] = []
+
+    def unreadable(path: str) -> str:
+        reads.append(path)
+        return ""
+    station.disk_label = unreadable
+    st = station.Station()
+    st.bridge.proc = Alive()  # type: ignore[assignment]
+    st.bridge._parse("ready")
+    st.bridge._parse("slot FD1 disk=1 protected=0")
+    st.bridge._parse("slot FD2 disk=0 protected=0")
+    st.state()
+    st.state()
+    st.state()
+    check(len(reads) == 1, "an unreadable disk is read once, not on every refresh")
+    st.bridge._parse("slot FD1 disk=1 protected=0")
+    st.state()
+    check(len(reads) == 2, "a new disk gets its one read")
+
+
 def main() -> int:
+    label_read_once(tempfile.mkdtemp(prefix="stationlabel"))
     d = tempfile.mkdtemp(prefix="stationtest")
     lib = os.path.join(d, "library")
     os.makedirs(lib)
@@ -59,10 +89,11 @@ def main() -> int:
     open(a, "wb").write(da)
     open(b, "wb").write(db)
     os.chmod(a, 0o444)                                   # a covered notch
-    cfgdir = os.path.join(d, "cfg", "pc98-floppy-station")
+    cfgdir = os.path.join(d, "cfg", "PC-98 Floppy Station" if sys.platform == "win32" else "pc98-floppy-station")
     os.makedirs(cfgdir)
     json.dump({"mountpoint": m, "library": lib}, open(os.path.join(cfgdir, "settings.json"), "w"))
-    env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(d, "cfg"), HOME=d, PC98_STATION_PORT="9811")
+    env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(d, "cfg"), APPDATA=os.path.join(d, "cfg"), HOME=d,
+               USERPROFILE=d, PC98_STATION_PORT="9811")
     log = open(os.path.join(d, "log"), "w+")
     p = subprocess.Popen([sys.executable, os.path.join(HERE, "station.py"), "--no-browser"],
                          stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -136,7 +167,8 @@ def main() -> int:
         fd1, fd2 = s["drives"]["FD1"]["file"], s["drives"]["FD2"]["file"]
         check(os.path.isfile(fd1) and os.path.isfile(fd2), "both drive files exist in the mount")
         check(open(fd1, "rb").read() == da, "FD1 reads as its image")
-        check(os.stat(fd1).st_mode & 0o222 == 0, "the protected image gives a read-only file")
+        if sys.platform != "win32":                      # WinFsp refuses the open instead, checked below
+            check(os.stat(fd1).st_mode & 0o222 == 0, "the protected image gives a read-only file")
         check(open(s["play"]).read() == f"np2kai {fd1} {fd2}\n", "play.cmd names both files")
         check("stop before changing" in post("api/settings", {"image": {"FD1": ""}})["message"],
               "images can't be changed while running")
@@ -169,7 +201,8 @@ def main() -> int:
         if p.poll() is None:
             p.terminate()
             p.wait(10)
-        subprocess.run(["fusermount3", "-u", m], check=False, stderr=subprocess.DEVNULL)
+        if sys.platform != "win32":
+            subprocess.run(["fusermount3", "-u", m], check=False, stderr=subprocess.DEVNULL)
     log.flush()
     print("".join("  " + line for line in open(log.name) if "error" in line.lower()))
     shutil.rmtree(d, ignore_errors=True)

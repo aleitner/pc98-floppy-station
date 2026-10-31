@@ -109,12 +109,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
-      # Only Linux has been run on a real machine. The Windows and Mac builds stay as
+      # Only Linux and Windows have been run on a real machine. The Mac builds stay as
       # workflow artifacts for testing and join the release once they have been proven.
       - name: Name the files
         run: |
           mkdir release
           cp out/pc98-floppy-station-linux/pc98-floppy-station-x86_64.AppImage release/pc98-floppy-station-linux.AppImage
+          cp out/pc98-floppy-station-windows/pc98-floppy-station.exe release/pc98-floppy-station-windows.exe
           ls -la release
       - uses: softprops/action-gh-release@v2
         with:

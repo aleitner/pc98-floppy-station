@@ -8,7 +8,8 @@ so a game runs from the real disks, with real swaps and real saves.
 
 Use copy disks, not originals. Playing reads a disk over and over.
 
-Status: tested on Linux (SteamOS). **Not yet run on Windows or macOS.**
+Status: tested on Linux (SteamOS) and Windows 11, where playing and disk swaps work from the
+real drives but **saving to a real disk hasn't been tested yet**. **Not yet run on macOS.**
 
 ## Install
 
@@ -47,7 +48,10 @@ ribbon, press "Swap left and right".
 
 **Every run:** press Start. The drives appear as `FD1.hdm` and `FD2.hdm` in `~/PC98Drives`
 (`P:` on Windows), with a `play.cmd` beside them. A disk whose write notch is covered shows
-as write-protected and the file is read-only, so the game can never write to it.
+as write-protected and the file is read-only, so the game can never write to it. On Windows
+the file doesn't carry the read-only flag: opening it for writing is refused instead. The
+RetroArch core tests exactly that, but an emulator that only reads the flag will show the disk
+as writable and report an error on a save.
 
 **Backups:** each drive has *Back up this disk*, which reads the disk once, track by track,
 into `Documents/PC98 Floppies` under the disk's own name (unreadable tracks are counted,
