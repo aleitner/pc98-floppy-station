@@ -1,0 +1,48 @@
+# local backup copies of files, kept while working
+*.bak
+*.pre*
+*.prev-*
+pc98_disk_unit.scad.*
+make_viewer.py.*
+*.zip.*
+
+# scratch work and personal notes
+session_scratch/
+drive_repair/
+disk_tests/
+stl/
+_img/*
+!_img/listing/
+_img/listing/test_*.png
+site/parts-list.html
+site/recess-sections.html
+
+# floppy disk contents are never committed
+*.hdm
+*.img
+*.scp
+*.d88
+*.fdi
+app/0
+app/10
+app/A
+app/B
+
+__pycache__/
+.mypy_cache/
+
+# development tooling and intermediate files, kept locally only
+site/
+assets/
+tools/
+*.bin.stl
+make_viewer.py
+render.py
+rend.sh
+PC98_disk_unit_print_pack_v13.zip
+
+# the desktop test tool is personal, not part of the release
+app/pc98_floppy.py
+app/pc98_floppy.png
+app/pc98-floppy-station.desktop
+app/floppy_mount.py

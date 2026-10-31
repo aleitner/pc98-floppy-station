@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC-98 Floppy Station</title>
+<meta name="description" content="A 3D-printed twin 5.25-inch floppy drive unit for NEC PC-98 disks, with software that lets an emulator play straight from the real drives.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=VT323&display=swap" rel="stylesheet">
+<style>
+/* One visual world: the setup screen of a PC-98 game. Blue field, a double-line
+   frame, bitmap type in white, green and yellow. A numbered menu on the left
+   opens one page at a time, like the real menus did. */
+:root {
+  --field: #1414b4;
+  --field-deep: #0c0c8c;
+  --frame: #ffff80;
+  --ink: #f4f4ff;
+  --ink-dim: #b8b8e8;
+  --green: #70ff70;
+  --yellow: #ffff60;
+  --cyan: #70ffff;
+  --select-bg: #ffff60;
+  --select-ink: #1414b4;
+  --mono: "DotGothic16", "MS Gothic", "Osaka-Mono", monospace;
+  --display: "VT323", "DotGothic16", monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--field);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 18px;
+  line-height: 1.55;
+  min-height: 100%;
+}
+a { color: var(--cyan); text-decoration: underline; text-underline-offset: 3px; }
+a:hover { color: #fff; }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+
+.screen {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 16px;
+}
+.frame {
+  border: 3px double var(--frame);
+  outline: 3px solid var(--frame);
+  outline-offset: 4px;
+  padding: 22px 24px 18px;
+  margin: 8px 7px;
+}
+header { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: baseline; justify-content: space-between; }
+h1 {
+  font-family: var(--display);
+  font-size: 58px;
+  line-height: 1;
+  margin: 0;
+  letter-spacing: .02em;
+  color: #fff;
+  text-wrap: balance;
+}
+.kana { color: var(--green); font-size: 20px; margin: 4px 0 0; }
+.tag { color: var(--yellow); font-size: 16px; }
+hr.rule { border: 0; border-top: 2px dashed var(--ink-dim); opacity: .55; margin: 18px 0; }
+
+.layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 24px 34px; align-items: start; }
+nav ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+nav button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: var(--ink);
+  font: inherit;
+  padding: 5px 10px 5px 8px;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 1.6em 1fr;
+  gap: 6px;
+}
+nav button .n { color: var(--yellow); }
+nav button:hover { color: #fff; background: var(--field-deep); }
+nav button[aria-current="page"] { background: var(--select-bg); color: var(--select-ink); }
+nav button[aria-current="page"] .n { color: var(--select-ink); }
+nav button[aria-current="page"]::before { content: ""; }
+nav .hint { color: var(--ink-dim); font-size: 15px; margin: 14px 0 0 8px; line-height: 1.45; }
+nav .hint kbd { font-family: inherit; color: var(--yellow); }
+
+main section { display: none; min-width: 0; }
+main section.on { display: block; }
+h2 {
+  font-family: var(--display);
+  font-size: 40px;
+  line-height: 1;
+  color: #fff;
+  margin: 0 0 14px;
+  text-wrap: balance;
+}
+h2 small { color: var(--green); font-family: var(--mono); font-size: 18px; margin-left: 12px; }
+h3 { font-size: 20px; color: var(--yellow); margin: 26px 0 8px; font-weight: 400; }
+p, li { max-width: 66ch; }
+p { margin: 0 0 12px; }
+ul, ol.steps { margin: 0 0 14px; padding-left: 1.4em; }
+li { margin: 0 0 6px; }
+ol.steps li::marker { color: var(--yellow); }
+ul li::marker { color: var(--green); }
+strong { color: var(--yellow); font-weight: 400; }
+em { color: var(--green); font-style: normal; }
+code, pre {
+  font-family: var(--mono);
+  background: var(--field-deep);
+  color: #fff;
+}
+code { padding: 1px 6px; }
+pre { padding: 12px 14px; overflow-x: auto; margin: 0 0 14px; border-left: 4px solid var(--green); max-width: 100%; }
+pre code { padding: 0; background: none; }
+figure { margin: 0 0 18px; max-width: 760px; }
+figure img { display: block; width: 100%; height: auto; border: 2px solid var(--frame); }
+figcaption { color: var(--ink-dim); font-size: 15px; margin-top: 6px; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; margin-bottom: 18px; }
+.table { overflow-x: auto; margin: 0 0 18px; }
+table { border-collapse: collapse; width: 100%; font-size: 16.5px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--field-deep); vertical-align: top; }
+th { color: var(--yellow); font-weight: 400; border-bottom: 2px solid var(--ink-dim); }
+td:first-child { color: #fff; white-space: nowrap; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.box {
+  border: 2px solid var(--frame);
+  padding: 12px 16px;
+  margin: 0 0 18px;
+  max-width: 66ch;
+}
+.box.warn { border-color: #ff8080; }
+.box.warn strong { color: #ff8080; }
+.status { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; max-width: 66ch; margin: 0 0 14px; font-size: 16.5px; }
+.status b { font-weight: 400; color: var(--green); }
+.status b.no { color: #ff9c9c; }
+
+footer {
+  margin-top: 26px;
+  padding-top: 10px;
+  border-top: 2px dashed var(--ink-dim);
+  display: flex; flex-wrap: wrap; gap: 6px 24px; justify-content: space-between;
+  color: var(--ink-dim); font-size: 15px;
+}
+footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; animation: blink 1.1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { footer .cur::after { animation: none; } }
+
+@media (max-width: 760px) {
+  body { font-size: 17px; }
+  .frame { padding: 16px 14px 14px; margin: 6px 5px; }
+  h1 { font-size: 42px; }
+  h2 { font-size: 32px; }
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  nav ol { flex-direction: row; flex-wrap: wrap; gap: 4px 10px; }
+  nav button { width: auto; grid-template-columns: auto 1fr; padding: 4px 8px; }
+  nav .hint { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="screen">
+<div class="frame">
+<header>
+  <div>
+    <h1>PC-98 FLOPPY STATION</h1>
+    <p class="kana">ＰＣ－９８ フロッピー ステーション　・　ドライブ ２台　・　５.２５インチ ２ＨＤ</p>
+  </div>
+  <p class="tag">TEAC FD-55GFR ×2 ＋ Greaseweazle</p>
+</header>
+<hr class="rule">
+
+<div class="layout">
+<nav aria-label="Pages">
+  <ol id="menu">
+    <li><button type="button" data-page="about"><span class="n">1.</span><span>What it is</span></button></li>
+    <li><button type="button" data-page="parts"><span class="n">2.</span><span>Parts to buy</span></button></li>
+    <li><button type="button" data-page="print"><span class="n">3.</span><span>Printing</span></button></li>
+    <li><button type="button" data-page="build"><span class="n">4.</span><span>Building</span></button></li>
+    <li><button type="button" data-page="software"><span class="n">5.</span><span>Software</span></button></li>
+    <li><button type="button" data-page="disks"><span class="n">6.</span><span>Caring for disks</span></button></li>
+    <li><button type="button" data-page="download"><span class="n">7.</span><span>Files and licence</span></button></li>
+  </ol>
+  <p class="hint"><kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens.<br>Or press a number.</p>
+</nav>
+
+<main>
+
+<section id="about">
+  <h2>What it is <small>ごあんない</small></h2>
+  <figure>
+    <img src="img/1_portrait_front.png" alt="The printed unit: a beige box with two 5.25-inch drive openings on the front, drawn on a blue field in the style of a PC-98 setup screen." width="2400" height="1800">
+    <figcaption>Side-by-side layout, 102.4 × 157.0 × 285 mm.</figcaption>
+  </figure>
+  <p>A 3D-printed box that holds two TEAC FD-55GFR 5.25" floppy drives and a Greaseweazle V4, so one USB cable gives a modern computer two real PC-98 floppy drives.</p>
+  <p>With the Greaseweazle's own tools you can read a disk to an image file, write an image to a blank and copy a game set disk by disk. With the bridge from this project you can run a game in an emulator while the disks stay in the drives, swapping them when the game asks, the way the real machine did.</p>
+  <p>Two layouts come from the same model: <strong>side by side</strong>, drives on edge like the PC-80S31 and X68000 drive units, or <strong>stacked</strong>, drives flat like a PC-9801 desktop. Same hardware, same screws.</p>
+  <p>The model is on <a href="https://cults3d.com/:5146826">Cults3D</a>, the model source, print files and software are on <a href="https://github.com/aleitner/pc98-floppy-station">GitHub</a>. Everything here is free to print and share with credit, not for sale.</p>
+</section>
+
+<section id="parts">
+  <h2>Parts to buy <small>部品リスト</small></h2>
+  <p>Everything for one unit, with the shops used. Prices change, so none are given.</p>
+  <div class="table"><table>
+    <tr><th>Part</th><th>Qty</th><th>Where</th><th>Notes</th></tr>
+    <tr><td>TEAC FD-55GFR drive</td><td class="num">2</td><td>eBay</td><td>This exact model: the shell is sized to its frame and bezel. "Untested" is normal; check each drive before building around it (see <em>Caring for disks</em>).</td></tr>
+    <tr><td>Greaseweazle V4.1</td><td class="num">1</td><td><a href="https://decromancer.ca/greaseweazle/">decromancer.ca</a></td><td>The USB floppy controller, with the 34-pin header the ribbon plugs into.</td></tr>
+    <tr><td>5 V / 12 V power supply</td><td class="num">1</td><td><a href="https://shop.deviceside.com/prod/PSU5">deviceside PSU5</a></td><td>Floppy-drive Molex power.</td></tr>
+    <tr><td>Y power cable</td><td class="num">1</td><td><a href="https://shop.deviceside.com/prod/YCABLE">deviceside YCABLE</a></td><td>Splits the supply to both drives.</td></tr>
+    <tr><td>34-pin ribbon, twisted, 36"</td><td class="num">1</td><td><a href="https://www.cablesonline.com/36unflopdriv.html">cablesonline</a></td><td>Card-edge connectors for 5.25" drives. The twist makes the two drives A and B.</td></tr>
+    <tr><td>USB-C cable</td><td class="num">1</td><td><a href="https://www.amazon.com/dp/B06XMY49BM">Amazon</a></td><td>Board to computer, through the notch in the rear door.</td></tr>
+    <tr><td>6-32 × 3/8" pan-head screws</td><td class="num">8</td><td><a href="https://www.amazon.com/dp/B0G6ZSQGT9">Amazon</a></td><td>Drives to the shell floor, through the washers.</td></tr>
+    <tr><td>#6 flat washers</td><td class="num">8</td><td><a href="https://www.amazon.com/dp/B0CM3MCSGS">Amazon</a></td><td>Under the drive screw heads.</td></tr>
+    <tr><td>M2.5 × 10 screws</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0G58L9P4G">Amazon</a></td><td>Greaseweazle to its posts.</td></tr>
+    <tr><td>M2.5 hex nuts</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0FMRGFZP4">Amazon</a></td><td>Pressed into the pockets under the floor.</td></tr>
+    <tr><td>Rubber bumper feet</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B074PXFWPK">Amazon</a></td><td>Into the recesses underneath.</td></tr>
+    <tr><td>PETG filament</td><td class="num">≈1.1 kg</td><td>any</td><td>Printed on a Prusa MK4S.</td></tr>
+  </table></div>
+  <p>Also useful: isopropyl alcohol, 90 % or stronger, cotton swabs, and a few blank 5.25" HD disks for testing drives before any original goes in.</p>
+</section>
+
+<section id="print">
+  <h2>Printing <small>プリント</small></h2>
+  <p>Pick <strong>one</strong> folder from the print files. They are two versions of the same box, not ten parts. Five files in each, all in millimetres and already rotated for printing.</p>
+  <div class="two">
+    <figure><img src="img/1_portrait_front.png" alt="Side-by-side layout render." loading="lazy" width="2400" height="1800"><figcaption>A, side by side: 102.4 × 157.0 × 285 mm. Taller and narrower.</figcaption></figure>
+    <figure><img src="img/4_landscape_front.png" alt="Stacked layout render." loading="lazy" width="2400" height="1800"><figcaption>B, stacked: 159.0 × 99.8 × 285 mm. Wider and lower.</figcaption></figure>
+  </div>
+  <div class="box warn"><strong>Print everything at 100 %.</strong> The drive openings were already tightened after a test print. Scaling in the slicer would shrink them, and the screw pattern the board bolts to. If the slicer shows a size other than the table below, something has been scaled.</div>
+
+  <h3>Print order: test rings first, it saves a day</h3>
+  <ol class="steps">
+    <li><strong>0a_FIT_TEST_front_ring</strong>, about 1 hour. Push a drive through it from the front, back end first. The metal frame should slide through without forcing, and the beige bezel should drop into the recess and sit flush. Try both drives; bezels vary a little.</li>
+    <li><strong>3_back_panel</strong>, then <strong>0b_FIT_TEST_rear_ring</strong>, about 1.5 hours. Tilt the panel's top away from you, drop its bottom tabs into the slots in the ring's sill, swing the top in until the clips click. It should sit evenly, about 1.5 mm inside the frame.</li>
+    <li>If both fit, print <strong>1_shell_FRONT</strong> and <strong>2_shell_REAR</strong>. If not, stop: the fit numbers are one line each in the model source.</li>
+  </ol>
+
+  <h3>Material and slicer settings</h3>
+  <ul>
+    <li><strong>PETG</strong>, not PLA. 0.4 mm nozzle, 0.2 mm layers.</li>
+    <li><strong>Perimeters:</strong> 6 for both shell halves and both test rings, because the screw seats want solid plastic under them. 3 for the back panel. Infill about 20 %.</li>
+    <li><strong>Supports: off.</strong> Every part prints without them. The slicer may flag a few small flat spots: the step inside each drive opening and the roofs of the nut pockets. Leave them, they have built-in bridge layers.</li>
+    <li><strong>Seam:</strong> Rear for the shells, it lands on the underside. Aligned for the back panel.</li>
+    <li><strong>Elephant-foot compensation:</strong> keep the profile's default, about 0.2 mm. The front's first layer is the mouth of the drive openings.</li>
+    <li><strong>Brim:</strong> none. Smooth PEI needs glue stick with PETG; satin or textured sheets don't, and the sheet's texture becomes the finish of the front.</li>
+    <li>Largest footprint 160 mm, tallest part 173 mm: any 200 × 200 bed, one part at a time.</li>
+  </ul>
+
+  <h3>Size check in the slicer</h3>
+  <div class="table"><table>
+    <tr><th>Part</th><th>Side by side (X × Y × Z mm)</th><th>Stacked (X × Y × Z mm)</th></tr>
+    <tr><td>0a_FIT_TEST_front_ring</td><td class="num">102.4 × 157.0 × 12.0</td><td class="num">159.0 × 99.8 × 12.0</td></tr>
+    <tr><td>0b_FIT_TEST_rear_ring</td><td class="num">102.4 × 157.0 × 27.0</td><td class="num">159.0 × 99.8 × 27.0</td></tr>
+    <tr><td>1_shell_FRONT</td><td class="num">102.4 × 157.0 × 120.0</td><td class="num">159.0 × 99.8 × 120.0</td></tr>
+    <tr><td>2_shell_REAR</td><td class="num">102.4 × 157.0 × 173.0</td><td class="num">159.0 × 99.8 × 173.0</td></tr>
+    <tr><td>3_back_panel</td><td class="num">99.1 × 152.5 × 24.0</td><td class="num">155.7 × 98.0 × 24.0</td></tr>
+  </table></div>
+</section>
+
+<section id="build">
+  <h2>Building <small>くみたて</small></h2>
+  <figure><img src="img/3_portrait_exploded.png" alt="Exploded render: drives in front, the front shell, the rear shell, then the door with the board, feet below." loading="lazy" width="2400" height="1800"><figcaption>Front to back: the two drives, the front shell, the rear shell, the door. The board lies on the rear shell's floor.</figcaption></figure>
+  <p>Before any of this, test both drives on a blank disk and clean their heads; see <em>Caring for disks</em>. It's much easier with the drives on the bench than in the box.</p>
+  <ol class="steps">
+    <li><strong>Check the drive jumpers.</strong> Both drives stay on <code>D1</code>, the factory setting; the twisted ribbon tells them apart. Leave the other straps as they came.</li>
+    <li><strong>Press the four M2.5 nuts</strong> into the hex pockets on the underside of the rear shell. A flat screwdriver handle does it; they only need to sit flush.</li>
+    <li><strong>Screw the Greaseweazle</strong> to the four posts on the rear shell's floor with the M2.5 × 10 screws, components up, USB-C socket toward the back.</li>
+    <li><strong>Slide the drives into the front shell</strong> from the back, bezels first, until each bezel drops into its recess and sits flush with the face.</li>
+    <li><strong>Plug in the ribbon</strong>: the end connector past the twist goes on one drive, the middle one on the other, the header on the board. Note which drive got the end connector; it becomes drive A. Plug the Y cable into both drives' power sockets.</li>
+    <li><strong>Push the two shells together.</strong> The front's strip slides inside the rear until the hidden tabs click, across the roof and down each side. A firm pull separates them again.</li>
+    <li><strong>Screw the drives down</strong> through the floor: a washer under each 6-32 screw head, four screws per drive, into the drives' own threaded holes. These screws are what ties the two halves together, so tighten them evenly.</li>
+    <li><strong>Plug in the USB-C cable</strong> and lead it through the notch in the door's bottom edge; plug in the power lead through its hole.</li>
+    <li><strong>Snap the door on</strong>: bottom tabs into the sill, swing the top in until it clicks, then the side tabs click as it seats.</li>
+    <li><strong>Stick the feet</strong> into the recesses underneath.</li>
+  </ol>
+  <p>Opening it later: pull the top edge of the door, unplug the cables, undo the eight drive screws, and pull the halves apart.</p>
+</section>
+
+<section id="software">
+  <h2>Software <small>ソフトウェア</small></h2>
+  <p>Reading, writing and copying disks is done with the <a href="https://github.com/keirf/greaseweazle">Greaseweazle host tools</a> themselves: <code>gw read</code>, <code>gw write</code>, with <code>--format pc98.2hd</code> for PC-98 disks. What this project adds is the bridge, Python on top of those tools. It includes no emulator and no BIOS files: bring your own.</p>
+  <div class="status">
+    <span>A game boots from the real drives</span><b>works, Linux</b>
+    <span>Saving back to the disk, swaps in play</span><b class="no">not yet tested</b>
+    <span>Windows, macOS</span><b class="no">not yet run</b>
+  </div>
+
+  <h3>The bridge</h3>
+  <p><code>app/floppy_bridge.py</code> shows the two real drives as two disk-image files, <code>FD1.hdm</code> and <code>FD2.hdm</code>, that an emulator opens like any other image. Reads come from the drive on demand, writes go back to the disk about a second after the game stops writing, and a disk swap is noticed through the drive's own disk-change line.</p>
+  <p>It needs a filesystem layer: <strong>libfuse</strong> on Linux, usually already there; <strong>WinFsp</strong> on Windows; <strong>FUSE-T</strong> or macFUSE on macOS.</p>
+  <h3>Install</h3>
+  <pre><code>python3 -m pip install mfusepy git+https://github.com/keirf/greaseweazle@latest</code></pre>
+  <p>The Greaseweazle package contains C code, so that step needs a compiler unless a build for your Python already exists: gcc on Linux, Microsoft C++ Build Tools on Windows, <code>xcode-select --install</code> on a Mac.</p>
+  <h3>Play</h3>
+  <pre><code>python3 floppy_bridge.py</code></pre>
+  <p>The left drive becomes FD1 and the right drive FD2; swap them with <code>--fd1 B --fd2 A</code>, or use one drive with <code>--fd2 none</code>. The files appear in <code>~/PC98Drives</code>, or <code>P:</code> on Windows. Start the bridge <strong>before</strong> the emulator: a sandboxed emulator only sees a folder that was already there.</p>
+  <p>Tested with RetroArch and the Neko Project II kai core, which re-reads the file on every access, so it sees swaps. The bridge writes a <code>play.cmd</code> next to the two files; load that in RetroArch with the core, and the game boots from whatever disk is in the left drive, as on the real machine. Games that want a system disk in one drive and the game in the other work the same way: put the disks where the game expects them.</p>
+  <p>To swap, open the lever, change the disk, close the lever, then answer the game. Wait a couple of seconds after a save before opening a lever. If a disk comes out first, the pending changes are dropped, never written to the next disk, and the bridge says so.</p>
+  <p>Stop: quit the emulator, then <code>fusermount3 -u ~/PC98Drives</code> on Linux or Ctrl-C elsewhere. Anything unsaved is written first.</p>
+  <p>Full notes, including a flag for a drive whose track 0 has drifted: <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/app/BRIDGE.md">app/BRIDGE.md</a>.</p>
+</section>
+
+<section id="disks">
+  <h2>Caring for disks <small>ディスクのとりあつかい</small></h2>
+  <div class="box warn"><strong>Original disks are irreplaceable.</strong> A drive that has sat for decades has oxide on its heads, and a dirty head scratches a disk in a few passes. Do the three steps below before anything you can't replace goes in.</div>
+  <ol class="steps">
+    <li><strong>Clean both heads.</strong> With the drive open, wipe the upper and lower heads with a cotton swab wet with isopropyl alcohol, 90 % or stronger, until a fresh swab comes away clean. Let them dry fully. Black residue on the swab is normal the first time and the reason to do this.</li>
+    <li><strong>Test on a blank.</strong> Write a full disk and read it back on the same drive, then read it on the other drive. A drive that only reads its own writing has a problem of its own.</li>
+    <li><strong>Read an original once.</strong> Make the image, verify it, and put the original away. Play from a copy written to a blank. Tape over the write notch of copies that the game never writes to.</li>
+  </ol>
+  <p>Check a disk's surface through the window after a test: hold it to the light and turn the hub. A fine ring where there was none is the drive telling you its head is dirty or damaged. Stop using that drive for anything that matters until it passes a clean test again.</p>
+  <p>Disks go in label up with the lever open, then close the lever; a drive with a disk upside down reports no disk at all. Keep hands and cables off the big round motor disc on the underside while a disk is spinning: anything touching it slows the disk and corrupts reads.</p>
+</section>
+
+<section id="download">
+  <h2>Files and licence <small>ファイルとライセンス</small></h2>
+  <ul>
+    <li><a href="https://cults3d.com/:5146826">Cults3D page</a>: the print pack, free.</li>
+    <li><a href="https://github.com/aleitner/pc98-floppy-station/tree/main/print">Print files on GitHub</a>: the same STLs, both layouts, with the print README.</li>
+    <li><a href="https://github.com/aleitner/pc98-floppy-station/blob/main/pc98_disk_unit.scad">Model source</a>: OpenSCAD, every fit number is a named line near the top.</li>
+    <li><a href="https://github.com/aleitner/pc98-floppy-station/tree/main/app">Software</a>: the bridge and its guide.</li>
+    <li><a href="https://github.com/aleitner/pc98-floppy-station/blob/main/PARTS.md">Parts list</a> as a file.</li>
+  </ul>
+  <h3>Licence</h3>
+  <p>The enclosure, its STL files, these pictures and the written guides are under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>: print it, share it, change it, as long as you credit the author, don't sell the files or prints, and share changed versions under the same terms.</p>
+  <p>The software is under the <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/LICENSE">MIT licence</a>.</p>
+  <p>The TEAC FD-55GFR dimensions come from TEAC's published specification. Names of other machines and products belong to their owners.</p>
+</section>
+
+</main>
+</div>
+
+<footer>
+  <span class="cur">READY</span>
+  <span>FD1: left drive　FD2: right drive</span>
+  <span>Copyright 2026 Alexander Leitner</span>
+</footer>
+</div>
+</div>
+
+<script>
+(function () {
+  var pages = ["about", "parts", "print", "build", "software", "disks", "download"];
+  var buttons = Array.prototype.slice.call(document.querySelectorAll("#menu button"));
+  function show(id, focusMain) {
+    if (pages.indexOf(id) < 0) id = pages[0];
+    pages.forEach(function (p) {
+      document.getElementById(p).classList.toggle("on", p === id);
+    });
+    buttons.forEach(function (b) {
+      if (b.dataset.page === id) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
+    if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
+    if (focusMain) {
+      var h = document.querySelector("#" + id + " h2");
+      if (h) { h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); }
+      window.scrollTo(0, 0);
+    }
+  }
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () { show(b.dataset.page, true); });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    var cur = pages.indexOf(location.hash.slice(1));
+    if (cur < 0) cur = 0;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") { show(pages[(cur + 1) % pages.length], true); e.preventDefault(); }
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") { show(pages[(cur + pages.length - 1) % pages.length], true); e.preventDefault(); }
+    else if (e.key >= "1" && e.key <= "7") { show(pages[Number(e.key) - 1], true); }
+  });
+  window.addEventListener("hashchange", function () { show(location.hash.slice(1), false); });
+  show(location.hash.slice(1), false);
+})();
+</script>
+</body>
+</html>
