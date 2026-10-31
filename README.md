@@ -34,7 +34,7 @@ One file, nothing else to install except the disk driver. Latest version:
 
 | | Download | Driver, for playing from the drives | First start |
 |---|---|---|---|
-| Linux | [pc98-floppy-station-linux.AppImage](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage) | `fuse3` from your distribution | Make it executable (right-click → Properties → Permissions, or `chmod +x`), then double-click. It appears in your menu with its icon after the first start. The window opens in your browser. A [bare executable](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux) is there too. |
+| Linux | [pc98-floppy-station-linux.AppImage](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage) | `fuse3` from your distribution | Make it executable (right-click → Properties → Permissions, or `chmod +x`), then double-click. It appears in your menu with its icon after the first start. The window opens in your browser. |
 | Windows | not yet | [WinFsp](https://winfsp.dev/rel/) | Built, not yet tried on a real machine. It will be released once it has been. |
 | macOS | not yet | [FUSE-T](https://www.fuse-t.org/) | Built for Apple silicon and Intel, not yet tried on a real Mac. Same. |
 

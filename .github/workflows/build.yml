@@ -43,9 +43,7 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: linux
-            artifact: |
-              dist/pc98-floppy-station
-              dist/pc98-floppy-station-x86_64.AppImage
+            artifact: dist/pc98-floppy-station-x86_64.AppImage
           - os: windows-latest
             name: windows
             artifact: dist/pc98-floppy-station.exe
@@ -94,12 +92,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: pc98-floppy-station-${{ matrix.name }}
-          path: |
-            app/dist/pc98-floppy-station
-            app/dist/pc98-floppy-station-x86_64.AppImage
-            app/dist/pc98-floppy-station.exe
-            app/dist/pc98-floppy-station-macos.zip
-            app/dist/pc98-floppy-station-macos-intel.zip
+          path: app/${{ matrix.artifact }}
           if-no-files-found: error
 
   release:
@@ -119,7 +112,6 @@ jobs:
         run: |
           mkdir release
           cp out/pc98-floppy-station-linux/pc98-floppy-station-x86_64.AppImage release/pc98-floppy-station-linux.AppImage
-          cp out/pc98-floppy-station-linux/pc98-floppy-station release/pc98-floppy-station-linux
           ls -la release
       - uses: softprops/action-gh-release@v2
         with:
