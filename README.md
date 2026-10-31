@@ -32,15 +32,17 @@ Parts to buy, with links: [PARTS.md](PARTS.md).
 
 One file per system, nothing else to install except the disk driver. Latest version:
 
-| | Download | Disk driver | First start |
+| | Download | Optional driver, for *Play from disk* | First start |
 |---|---|---|---|
 | Windows | [pc98-floppy-station-windows.exe](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-windows.exe) | [WinFsp](https://winfsp.dev/rel/) | Windows may warn about an unknown publisher: *More info*, then *Run anyway*. |
 | macOS | [pc98-floppy-station-macos.zip](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-macos.zip) | [FUSE-T](https://www.fuse-t.org/) | Unzip, then right-click the app and choose *Open* the first time. |
 | Linux | [pc98-floppy-station-linux](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux) | `fuse3` from your distribution | `chmod +x pc98-floppy-station-linux`, then run it. |
 
 Plug the unit in, start the program, and a window opens. The first time, put a disk in
-the **left** drive only and press *Check*, so it learns which drive is which. After that:
-*Start*, then *Play*. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
+the **left** drive only and press *Check*, so it learns which drive is which. Then pick a
+way to play: **Load into memory** reads each disk in first (about two minutes a disk the
+first time) and needs nothing else installed; **Play from disk** plays live from the
+floppies and needs the driver above. Then *Play*. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
 The Windows and Mac files are built by GitHub and have not been tried on a real machine yet.
 
 ## The software
@@ -52,11 +54,20 @@ image files (`FD1.hdm`, `FD2.hdm`) that an emulator opens like any other image. 
 come from the drive on demand, writes go back to the disk a moment later, and a disk
 swap is noticed by the drive's own disk-change line.
 
-[`app/station.py`](app/station.py) is the window for it: it shows the board and both
-drives, a Start button, the two files, and a Play button when RetroArch with the
-PC-98 core is installed. [`app/floppy_bridge.py`](app/floppy_bridge.py) is the bridge
-itself, which the window runs for you. It needs a FUSE driver: libfuse on Linux,
-WinFsp on Windows, FUSE-T or macFUSE on macOS. Setup and use: [app/BRIDGE.md](app/BRIDGE.md).
+[`app/station.py`](app/station.py) is the window: the board and both drives, two ways to
+start, the two files, a Play button when RetroArch with the PC-98 core is installed, and
+a Back up button per drive. The two ways:
+
+- **Load into memory** ([`app/loaded_mode.py`](app/loaded_mode.py)): each disk is read in
+  full into an ordinary file, the emulator plays from that, and the program watches the
+  file: saves are written back to the floppy, verified, and a swapped disk is read in.
+  No driver. A write-protected disk's image is cached, so later starts are quick; a
+  writable disk is always read afresh.
+- **Play from disk** ([`app/floppy_bridge.py`](app/floppy_bridge.py)): the files *are* the
+  drives; every read goes to the floppy as the game asks. Needs a FUSE driver: libfuse on
+  Linux, WinFsp on Windows, FUSE-T or macFUSE on macOS.
+
+Setup and use: [app/BRIDGE.md](app/BRIDGE.md).
 
 The bridge is proven on Linux with RetroArch's Neko Project II kai core: a game
 boots from the real drives and reads correctly from both. Saving back to a disk,

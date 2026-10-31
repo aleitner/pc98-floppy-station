@@ -50,7 +50,8 @@ def main() -> int:
     open(b, "wb").write(db)
     cfgdir = os.path.join(d, "cfg", "pc98-floppy-station")
     os.makedirs(cfgdir)
-    json.dump({"left": "A", "mountpoint": m}, open(os.path.join(cfgdir, "settings.json"), "w"))
+    json.dump({"left": "A", "mountpoint": m, "folder": os.path.join(d, "f")},
+              open(os.path.join(cfgdir, "settings.json"), "w"))
     env = dict(os.environ, PC98_STATION_IMAGES=f"FD1={a},FD2={b}", XDG_CONFIG_HOME=os.path.join(d, "cfg"))
     log = open(os.path.join(d, "log"), "w+")
     p = subprocess.Popen([sys.executable, os.path.join(HERE, "station.py"), "--no-browser"],
@@ -109,6 +110,34 @@ def main() -> int:
         check(post("api/stop", {}).get("message") == "stopped", "stop accepted")
         check(wait_for(lambda: get("api/state")["running"] is False), "bridge stopped")
         check(not os.path.exists(fd1), "files gone after stop")
+
+        # ---- loaded mode: plain files, no driver. a is made read-only = a covered notch.
+        da = open(a, "rb").read()
+        db = open(b, "rb").read()
+        os.chmod(a, 0o444)
+        check(post("api/start", {"mode": "loaded"}).get("message") == "reading the disks", "loaded mode starts")
+        check(wait_for(lambda: get("api/state")["ready"] is True, 30), "both disks read into memory")
+        s = get("api/state")
+        lf1, lf2 = s["drives"]["FD1"]["file"], s["drives"]["FD2"]["file"]
+        check(s["mode"] == "loaded" and os.path.isfile(lf1) and os.path.isfile(lf2), "plain files exist")
+        check(open(lf1, "rb").read() == da and open(lf2, "rb").read() == db, "files hold the disks' bytes")
+        check(s["drives"]["FD1"]["protected"] is True and not os.access(lf1, os.W_OK), "protected disk gives a read-only file")
+        save = b"MEMSAVE!" * 128
+        with open(lf2, "r+b", buffering=0) as f:
+            f.seek(100 * 1024)
+            f.write(save)
+        check(wait_for(lambda: open(b, "rb").read()[100 * 1024:101 * 1024] == save, 10), "a save in the file reaches the disk")
+        check(open(b, "rb").read()[:100 * 1024] == db[:100 * 1024], "only the changed track was written")
+        # swap FD1: a new image under the same name (new inode) is a new disk
+        os.chmod(a, 0o644)
+        swapped = os.urandom(SIZE)
+        tmp = a + ".new"
+        open(tmp, "wb").write(swapped)
+        os.replace(tmp, a)
+        check(wait_for(lambda: open(lf1, "rb").read(1024) == swapped[:1024], 30), "a swapped disk is read in and the file replaced")
+        check(wait_for(lambda: get("api/state")["ready"] is True, 30), "ready again after the swap")
+        check(post("api/stop", {}).get("message") == "stopped", "loaded mode stops cleanly")
+        check(not os.path.exists(lf1) and not os.path.exists(lf2), "loaded files removed after stop")
 
         post("api/bye", {"token": token})
         check(wait_for(lambda: p.poll() is not None, 15), "program ends after the page says goodbye")
