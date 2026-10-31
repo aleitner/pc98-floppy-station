@@ -37,6 +37,7 @@ from bridge_paths import EXT, GEOMETRY, cmd_path, default_mountpoint
 SYSTEM = platform.system()
 PORT = 9801
 APP_NAME = "PC-98 Floppy Station"
+VERSION = "0.1.0"
 FROZEN = getattr(sys, "frozen", False)
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.join(HERE, "static")
@@ -422,7 +423,7 @@ class Station:
             drives[name] = info
         emu = find_retroarch()
         return {
-            "app": APP_NAME,
+            "app": APP_NAME, "version": VERSION,
             "system": SYSTEM,
             "board": {"present": self.bridge.running or board is not None, "port": board},
             "driver": {"ok": self.driver_ok, "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},

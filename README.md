@@ -28,6 +28,21 @@ The same pack is on [Cults3D](https://cults3d.com/:5146826).
 
 Parts to buy, with links: [PARTS.md](PARTS.md).
 
+## Download
+
+One file per system, nothing else to install except the disk driver. Latest version:
+
+| | Download | Disk driver | First start |
+|---|---|---|---|
+| Windows | [pc98-floppy-station-windows.exe](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-windows.exe) | [WinFsp](https://winfsp.dev/rel/) | Windows may warn about an unknown publisher: *More info*, then *Run anyway*. |
+| macOS | [pc98-floppy-station-macos.zip](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-macos.zip) | [FUSE-T](https://www.fuse-t.org/) | Unzip, then right-click the app and choose *Open* the first time. |
+| Linux | [pc98-floppy-station-linux](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux) | `fuse3` from your distribution | `chmod +x pc98-floppy-station-linux`, then run it. |
+
+Plug the unit in, start the program, and a window opens. The first time, put a disk in
+the **left** drive only and press *Check*, so it learns which drive is which. After that:
+*Start*, then *Play*. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
+The Windows and Mac files are built by GitHub and have not been tried on a real machine yet.
+
 ## The software
 
 Reading, writing and copying disks is done with the

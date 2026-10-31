@@ -115,7 +115,7 @@ a { color: var(--cyan); }
 <h2 style="margin-top:16px">Log <small>ログ</small></h2>
 <pre class="log" id="log"></pre>
 
-<footer><span class="cur" id="ready">READY</span><span id="files"></span><span>Closing this window ends the program once the bridge is stopped.</span></footer>
+<footer><span class="cur" id="ready">READY</span><span id="files"></span><span id="ver"></span><span>Closing this window ends the program once the bridge is stopped.</span></footer>
 </div></div>
 
 <script>
@@ -178,6 +178,7 @@ a { color: var(--cyan); }
     if (atEnd) log.scrollTop = log.scrollHeight;
     $("ready").textContent = S.running ? (S.ready ? "RUNNING" : "WAIT") : "READY";
     $("files").textContent = S.running ? "play.cmd: " + S.play : "";
+    $("ver").textContent = "v" + S.version;
     if (S.message && !$("msg").textContent) $("msg").textContent = S.message;
   }
   function refresh() {
