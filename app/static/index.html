@@ -126,7 +126,8 @@ a { color: var(--cyan); }
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
   function post(path, body, quiet) {
-    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    var ae = document.activeElement;
+    if (ae && ae.tagName === "SELECT") ae.blur();       // a typed command must keep its focus
     return fetch(path, { method: "POST", headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
                          body: JSON.stringify(body || {}) })
       .then(function (r) { if (!r.ok) throw new Error(r.status === 403 ? "the program was restarted; reload this window" : "request failed (" + r.status + ")"); return r.json(); })
@@ -136,7 +137,7 @@ a { color: var(--cyan); }
         return j;
       }, function (e) { $("msg").textContent = e.message; return {}; });
   }
-  function drive(el, name, d, running) {
+  function drive(el, name, d) {
     var state;
     if (d.image) state = (d.disk ? '<b>image</b>' : '<b class="bad">image missing</b>') + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>') + (d.label ? ' <b class="lbl">\u00b7 ' + esc(d.label) + '</b>' : '');
     else if (!S.identified) state = '<b class="off">unit not yet identified</b>';
@@ -168,12 +169,12 @@ a { color: var(--cyan); }
     return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.library.folder);
   }
   function render() {
-    $("sys").textContent = S.system + " \u00b7 " + (S.board.port || (S.running ? "in use by the bridge" : "no board"));
+    $("sys").textContent = S.system + " \u00b7 " + (S.board.port || (S.busy ? "board in use" : "no board"));
     $("setup").hidden = S.identified;
     $("driverhint").textContent = S.driver.hint + (S.driver.detail ? " (" + S.driver.detail + ")" : "");
-    drive($("fd1"), "FD1", S.drives.FD1, S.running);
-    drive($("fd2"), "FD2", S.drives.FD2, S.running);
-    $("board").textContent = S.board.present ? (S.running ? "connected, in use" : "connected on " + S.board.port) : "not found";
+    drive($("fd1"), "FD1", S.drives.FD1);
+    drive($("fd2"), "FD2", S.drives.FD2);
+    $("board").textContent = S.board.present ? (S.board.port ? "connected on " + S.board.port : "connected, in use") : "not found";
     $("board").className = S.board.present ? "" : "bad";
     var b = $("bstate");
     if (S.running && S.ready) { b.textContent = "running, files in " + S.mountpoint; b.className = ""; }
@@ -209,9 +210,10 @@ a { color: var(--cyan); }
             function () { $("bstate").textContent = "the program has closed; start it again and reload"; $("bstate").className = "bad"; });
   }
   document.addEventListener("click", function (e) {
-    var t = e.target.closest("button"); if (!t) return;
+    var t = e.target.closest("button"); if (!t || !S) return;
     if (t.dataset.post) { $("msg").textContent = ""; post(t.dataset.post); }
     else if (t.dataset.copy) {
+      if (!navigator.clipboard) { $("msg").textContent = "copying isn't available here; select the text instead"; return; }
       navigator.clipboard.writeText(t.dataset.copy).then(function () { $("msg").textContent = "copied"; }, function () { $("msg").textContent = "copying isn't allowed here; select the text instead"; });
     }
     else if (t.id === "startstop") { $("msg").textContent = S.running ? "stopping" : "starting"; post(S.running ? "/api/stop" : "/api/start"); }
@@ -228,7 +230,7 @@ a { color: var(--cyan); }
     post("/api/settings", { image: im }).then(function (j) { if (!j || j.message !== "saved") sel.value = ""; });
   });
   window.addEventListener("pagehide", function () {
-    try { navigator.sendBeacon("/api/bye", new Blob([JSON.stringify({ token: TOKEN })], { type: "application/json" })); } catch (e) {}
+    try { navigator.sendBeacon("/api/bye", JSON.stringify({ token: TOKEN })); } catch (e) {}
   });
   refresh();
   setInterval(refresh, 1000);

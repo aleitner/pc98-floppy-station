@@ -858,7 +858,7 @@ module cable_run(pts, d) {
         translate(pts[i+1]) sphere(d = d, $fn = 16);
     }
 }
-// Deck's USB-C lead: plug hangs on the receptacle's own axis, so a tug pulls
+// The USB-C lead: plug hangs on the receptacle's own axis, so a tug pulls
 // it out instead of levering the socket off the board; the cable then has
 // USB_DROP of free length before the window's bottom edge.
 module usb_cable() {

@@ -45,7 +45,7 @@ APP_NAME = "PC-98 Floppy Station"
 VERSION = "0.2.0"
 FROZEN = getattr(sys, "frozen", False)
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-STATIC = os.path.join(HERE, "static")
+STATIC = os.path.realpath(os.path.join(HERE, "static"))   # canonical, so served paths compare
 SLOTS = ("FD1", "FD2")
 MAX_BODY = 64 * 1024
 
@@ -169,7 +169,7 @@ RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {f
 
 
 def safe_name(text: str) -> str:
-    keep = "".join(c if c.isalnum() or c in "-_ " else "_" for c in text).strip()
+    keep = "".join(c if c.isalnum() or c in "-_ ()" else "_" for c in text).strip()
     if not keep:
         return "disk"
     if keep.upper() in RESERVED:            # Windows device names can't be file names
@@ -209,13 +209,22 @@ def writable(path: str) -> bool:
 
 
 # -- hardware checks (only while nothing is running: the bridge owns the board) ------
-def board_port() -> Optional[str]:
+_board_cache: Tuple[float, Optional[str]] = (0.0, None)
+
+
+def board_port(max_age: float = 3.0) -> Optional[str]:
+    """The board's serial port, looked up at most every few seconds: the page asks often."""
+    global _board_cache
+    when, port = _board_cache
+    if time.monotonic() - when < max_age:
+        return port
     try:
         from greaseweazle.tools import util
-        port: str = util.find_port()
-        return port
+        found: Optional[str] = util.find_port()
     except Exception:
-        return None
+        found = None
+    _board_cache = (time.monotonic(), found)
+    return found
 
 
 def driver_check() -> Tuple[bool, str]:
@@ -675,7 +684,7 @@ class Station:
                 return "still checking for the disk driver; try again in a moment"
             if not self.driver_ok:
                 return driver_hint()
-            if not board_port():
+            if not board_port(0):
                 return "the Greaseweazle isn't connected"
             self.probe = {}
             return self.bridge.start(self.cfg)
@@ -692,22 +701,27 @@ class Station:
 
     def identify(self) -> Dict[str, Any]:
         """The user has put a disk in the LEFT drive only: whichever unit holds a disk is left."""
-        if self.busy:
-            return {"ok": False, "message": "stop first" if self.running else "wait for the backup to finish"}
-        try:
-            probe = probe_drives(self.cfg)
-        except Exception as e:
-            return {"ok": False, "message": f"couldn't talk to the drives: {e}"}
-        self.probe = probe
-        with_disk = [k for k, v in probe.items() if v["disk"]]
-        if len(with_disk) != 1:
-            return {"ok": False, "message": "no disk found" if not with_disk else
-                    "both drives hold a disk; leave only the left one in"}
-        self.cfg.left = with_disk[0]
-        self.cfg.save()
-        return {"ok": True, "message": f"the left drive is unit {self.cfg.left}; the right one is {self.cfg.right}"}
+        with self.lock:
+            if self.busy:
+                return {"ok": False, "message": "stop first" if self.running else "wait for the backup to finish"}
+            try:
+                probe = probe_drives(self.cfg)
+            except Exception as e:
+                return {"ok": False, "message": f"couldn't talk to the drives: {e}"}
+            self.probe = probe
+            with_disk = [k for k, v in probe.items() if v["disk"]]
+            if len(with_disk) != 1:
+                return {"ok": False, "message": "no disk found" if not with_disk else
+                        "both drives hold a disk; leave only the left one in"}
+            self.cfg.left = with_disk[0]
+            self.cfg.save()
+            return {"ok": True, "message": f"the left drive is unit {self.cfg.left}; the right one is {self.cfg.right}"}
 
     def settings(self, data: Dict[str, Any]) -> str:
+        with self.lock:
+            return self._settings(data)
+
+    def _settings(self, data: Dict[str, Any]) -> str:
         """Check everything first, then apply, then save: a refused change changes nothing."""
         changes: Dict[str, Any] = {}
         if "emulator_command" in data:
@@ -748,20 +762,21 @@ class Station:
 
     def backup(self, name: str) -> str:
         """Read the whole disk in FD1 or FD2 into an image file, once, track by track."""
-        if name not in SLOTS:
-            return "unknown drive"
-        if self.cfg.images.get(name):
-            return f"{name} is playing from an image already"
-        if self.running:
-            return "stop first"
-        if self.backing_up:
-            return "a backup is already running"
-        letter = self.cfg.letter(name)
-        if letter not in ("A", "B"):
-            return "identify the left drive first"
-        self.job = {"name": name, "track": 0, "total": 0, "bad": [], "done": False, "error": "", "file": ""}
-        threading.Thread(target=self._backup_worker, args=(name, letter), daemon=True).start()
-        return "backing up " + name
+        with self.lock:
+            if name not in SLOTS:
+                return "unknown drive"
+            if self.cfg.images.get(name):
+                return f"{name} is playing from an image already"
+            if self.running:
+                return "stop first"
+            if self.backing_up:
+                return "a backup is already running"
+            letter = self.cfg.letter(name)
+            if letter not in ("A", "B"):
+                return "identify the left drive first"
+            self.job = {"name": name, "track": 0, "total": 0, "bad": [], "done": False, "error": "", "file": ""}
+            threading.Thread(target=self._backup_worker, args=(name, letter), daemon=True).start()
+            return "backing up " + name
 
     def _backup_worker(self, name: str, letter: str) -> None:
         from floppy_drive import GwBackend, GwBoard
@@ -809,6 +824,8 @@ def make_handler(st: Station, port: int) -> type:
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
     class Handler(http.server.BaseHTTPRequestHandler):
+        timeout = 10                          # a stalled client can't park a thread for good
+
         def log_message(self, fmt: str, *args: Any) -> None:
             pass
 
@@ -823,7 +840,11 @@ def make_handler(st: Station, port: int) -> type:
 
         def _file(self, path: str, subst: bool = False) -> None:
             full = os.path.realpath(os.path.join(STATIC, path))
-            if os.path.commonpath([full, STATIC]) != STATIC or not os.path.isfile(full):
+            try:
+                inside = os.path.commonpath([full, STATIC]) == STATIC
+            except ValueError:               # different drives on Windows
+                inside = False
+            if not inside or not os.path.isfile(full):
                 self.send_error(404)
                 return
             with open(full, "rb") as f:
@@ -868,6 +889,8 @@ def make_handler(st: Station, port: int) -> type:
                     self._json(st.state())
                 else:
                     self.send_error(404)
+            except (BrokenPipeError, ConnectionResetError):
+                return                         # the page reloaded mid-answer
             except Exception:
                 log.exception("GET %s failed", self.path)
                 self.send_error(500)
@@ -923,6 +946,8 @@ def make_handler(st: Station, port: int) -> type:
                     self.send_error(404)
                     return
                 self._json({"message": st.message})
+            except (BrokenPipeError, ConnectionResetError):
+                return
             except Exception:
                 log.exception("POST %s failed", self.path)
                 self.send_error(500)

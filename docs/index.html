@@ -228,7 +228,7 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
   <p>Pick <strong>one</strong> folder from the print files. They are two versions of the same box, not ten parts. Five files in each, all in millimetres and already rotated for printing.</p>
   <div class="two">
     <figure><img src="img/1_portrait_front.png" alt="Side-by-side layout render." loading="lazy" width="2400" height="1800"><figcaption>A, side by side: 102.4 × 157.0 × 285 mm. Taller and narrower.</figcaption></figure>
-    <figure><img src="img/5_landscape_exploded.png" alt="Stacked layout, exploded: drives, front shell, rear shell, door." loading="lazy" width="2400" height="1800"><figcaption>B, stacked: 159.0 × 99.8 × 285 mm. Wider and lower.</figcaption></figure>
+    <figure><img src="img/4_landscape_front.png" alt="Stacked layout render." loading="lazy" width="2400" height="1800"><figcaption>B, stacked: 159.0 × 99.8 × 285 mm. Wider and lower.</figcaption></figure>
   </div>
   <div class="box warn"><strong>Print everything at 100 %.</strong> The drive openings were already tightened after a test print. Scaling in the slicer would shrink them, and the screw pattern the board bolts to. If the slicer shows a size other than the table below, something has been scaled.</div>
 
@@ -269,7 +269,7 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
     <li><strong>Press the four M2.5 nuts</strong> into the hex pockets on the underside of the rear shell, near the back. They're meant to be tight: a flat screwdriver handle or a few light taps puts them home.</li>
     <li><strong>Lay the Greaseweazle on the four posts</strong> in the rear shell's floor, components up, USB-C socket toward the back, ribbon header toward the drives. It only fits one way. Drive the four M2.5 × 10 screws down through the board into the nuts: snug, not tight.</li>
     <li><strong>Plug the USB-C cable into the board.</strong> Its plug will sit in the notch at the bottom of the door.</li>
-    <li><strong>Fit the two shells together.</strong> The front half's tongue pushes into the rear half until the hidden tabs click. Stand the box on its feet.</li>
+    <li><strong>Fit the two shells together.</strong> The front half's tongue pushes into the rear half until the hidden tabs click. Stand the box upright.</li>
     <li><strong>Slide each drive in from the front</strong>, back end first, until its beige bezel drops into the recess, flush with the face. The bezel is wider than the slot, so drives only ever go in and out at the front.</li>
     <li><strong>Screw the drives down</strong>, a washer under every head. Side by side: two 6-32 screws per drive, up through the floor. Stacked: four per drive, two through each side wall; start all four before tightening any, then tighten alternately so the drive stays centred.</li>
     <li><strong>Press the shells firmly together</strong> before tightening each drive's rear screw. Snug with a short screwdriver, no wrist: more crushes the plastic. Re-snug after a day or two.</li>
@@ -277,7 +277,10 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
     <li><strong>Snap the door on</strong>: hold its top tilted away, drop the two bottom tabs into the slots in the sill, swing the top in and press until the clips click; the side tabs click as it seats.</li>
     <li><strong>Stick the feet</strong> into the recesses underneath.</li>
   </ol>
-  <figure><img src="img/2_portrait_rear.png" alt="Rear view render: the door with the USB-C notch at its bottom edge and the power lead's hole." loading="lazy" width="2400" height="1800"><figcaption>The back: USB-C through the notch in the door's bottom edge, power through the hole above it.</figcaption></figure>
+  <div class="two">
+    <figure><img src="img/2_portrait_rear.png" alt="Rear view render: the door with the USB-C notch at its bottom edge and the power lead's hole." loading="lazy" width="2400" height="1800"><figcaption>The back: USB-C through the notch in the door's bottom edge, power through the hole above it.</figcaption></figure>
+    <figure><img src="img/5_landscape_exploded.png" alt="Stacked layout, exploded: drives, front shell, rear shell, door." loading="lazy" width="2400" height="1800"><figcaption>The stacked layout comes apart the same way; its drive screws go through the side walls.</figcaption></figure>
+  </div>
   <p>Opening it later: pull the door's top edge out at the finger notch, unplug the cables, undo the drive screws, and push each drive out of the front from behind. If a bezel sits a little proud, shave the step it stops on, 5 mm inside the opening.</p>
 </section>
 
@@ -302,7 +305,7 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
   </table></div>
   <p>One file. The driver is needed to play from the drives; a backup chosen for both drives plays without it. Linux is where it has been developed and tested. All versions are on the <a href="https://github.com/aleitner/pc98-floppy-station/releases">releases page</a>.</p>
   <h3>From source instead</h3>
-  <pre><code>python3 -m pip install mfusepy pywebview git+https://github.com/keirf/greaseweazle@latest
+  <pre><code>python3 -m pip install mfusepy pywebview pystray git+https://github.com/keirf/greaseweazle@latest
 python3 app/station.py</code></pre>
   <p>The Greaseweazle package contains C code, so the first line needs a compiler unless a build for your Python already exists.</p>
   <h3>Use</h3>

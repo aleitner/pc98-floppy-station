@@ -181,7 +181,7 @@ The board (both layouts: it goes in the rear piece, on its floor):
 
 The drives:
 4. Fit the two shell halves together: the front half's tongue pushes into the
-   back half, and the hidden tabs click as it seats. Stand the box on its feet.
+   back half, and the hidden tabs click as it seats. Stand the box upright.
 5. Slide each drive in from the FRONT, back end first, until the beige bezel
    drops into its recess, flush with the face.
 6. Screws: a washer under every head. Side by side: two per drive, up through

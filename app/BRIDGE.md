@@ -69,10 +69,11 @@ about a second after the game stops writing. If a disk comes out first, those ch
 dropped, never written to the next disk, and the log says so.
 
 Stop writes anything unsaved first. Closing the program's own window stops the bridge the same
-way; with a tray icon, closing the window only hides it and *Quit* ends the program. A browser
-tab that was closed ends the program a few seconds after the bridge is stopped.
+way; with a tray icon, closing the window only hides it and *Quit* ends the program. A closed
+browser tab or window ends the program a few seconds later; the drives are stopped first, with
+anything pending written.
 
-Settings are kept in `~/.config/pc98-floppy-station/settings.json` (Linux),
+Settings are kept in `~/.config/pc98-floppy-station/settings.json` (Linux), with `station.log` beside it,
 `%APPDATA%\PC-98 Floppy Station` (Windows) or `~/Library/Application Support/PC-98 Floppy Station` (macOS).
 
 ## The bridge on its own

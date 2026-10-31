@@ -41,9 +41,9 @@ One file, nothing else to install except the disk driver. Latest version:
 Plug the unit in, start the program, and a window opens. The first time, put a disk in
 the **left** drive only and press *Check*, so it learns which drive is which. Then
 *Start*, then *Play*. Each drive has a *Back up this disk* button, and a backup can stand
-in for a drive: choose it under *Use a backup instead*, and the game plays from a copy of
-that file, with its changes written back to it on Stop. With backups chosen for both drives,
-no driver is needed at all. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
+in for a drive: choose it under *Use a backup instead*, and the game plays from that file,
+so saves land in it. With backups chosen for both drives the game plays from copies that are
+written back on Stop, and no driver is needed at all. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
 Linux is where it has been developed and tested, on a Steam Deck.
 
 ## The software
