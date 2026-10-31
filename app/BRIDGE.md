@@ -49,9 +49,14 @@ as write-protected and the file is read-only, so the game can never write to it.
 into `Documents/PC98 Floppies` under the disk's own name (unreadable tracks are counted,
 not retried over and over). *Use a backup instead* lists that folder: pick an image and the
 drive plays from the file rather than the floppy; saves then land in the file. *Use the
-drive* switches back. When both drives play from images, the files are placed directly in
-`~/PC98Drives` on every system (links, or copies written back on Stop) and no driver is
-involved.
+drive* switches back. When both drives play from images, no driver is involved: each image
+is copied into `~/PC98Images` (`C:\ProgramData\PC98Images` on Windows, a path without
+spaces, which the emulator's command file needs), the game plays from the copy, and on Stop
+the changes are copied back into the image. If the program dies before Stop, the next Start
+finds the changed copy and writes it back first.
+
+A backup whose read had unreadable tracks is named for it, e.g. `Xak2-No2 (3 unreadable
+tracks).hdm`, with those tracks filled with zeros, so it is never mistaken for a clean one.
 
 **Play:** if RetroArch with the Neko Project II kai core is installed, the Play button starts
 it with both drives loaded. For any other emulator, open the two files in its first and

@@ -116,7 +116,7 @@ a { color: var(--cyan); }
 <h2 style="margin-top:16px">Log <small>ログ</small></h2>
 <pre class="log" id="log"></pre>
 
-<footer><span class="cur" id="ready">READY</span><span id="files"></span><span id="ver"></span><span>Closing this window ends the program once the bridge is stopped.</span></footer>
+<footer><span class="cur" id="ready">READY</span><span id="files"></span><span id="ver"></span><span id="footnote"></span></footer>
 </div></div>
 
 <script>
@@ -125,13 +125,16 @@ a { color: var(--cyan); }
   var S = null;
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
-  function post(path, body) {
+  function post(path, body, quiet) {
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     return fetch(path, { method: "POST", headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
-                         body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); }).then(function (j) {
-      if (j && j.message !== undefined) $("msg").textContent = j.message;
-      refresh();
-      return j;
-    });
+                         body: JSON.stringify(body || {}) })
+      .then(function (r) { if (!r.ok) throw new Error(r.status === 403 ? "the program was restarted; reload this window" : "request failed (" + r.status + ")"); return r.json(); })
+      .then(function (j) {
+        if (!quiet && j && j.message !== undefined) { $("msg").textContent = j.message; lastServerMsg = j.message; }
+        refresh();
+        return j;
+      }, function (e) { $("msg").textContent = e.message; return {}; });
   }
   function drive(el, name, d, running) {
     var state;
@@ -145,23 +148,24 @@ a { color: var(--cyan); }
       '<span class="state">' + state + '</span>' +
       '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>' +
       (d.image
-        ? '<span class="path"><button type="button" class="small" data-usedrive="' + name + '"' + (S.running ? ' disabled' : '') + '>Use the drive</button><span class="job">playing from ' + esc(d.image_name) + '</span></span>'
+        ? '<span class="path"><button type="button" class="small" data-usedrive="' + name + '"' + (S.busy ? ' disabled' : '') + '>Use the drive</button><span class="job">playing from ' + esc(d.image_name) + '</span></span>'
         : '<span class="path"><button type="button" class="small" data-backup="' + name + '"' + (canBackup(d) ? '' : ' disabled') + '>Back up this disk</button>' + imageSelect(name) + '<span class="job">' + jobText(name) + '</span></span>');
-    // Redrawing while a list is open or a button has focus would snatch it away: wait.
-    if (el.contains(document.activeElement) && document.activeElement !== document.body) return;
-    if (el.innerHTML !== html) el.innerHTML = html;
+    // Redrawing while a list is open would close it: wait for the choice.
+    var ae = document.activeElement;
+    if (ae && ae.tagName === "SELECT" && el.contains(ae)) return;
+    if (el._drawn !== html) { el._drawn = html; el.innerHTML = html; }
   }
   function imageSelect(name) {
     if (!S.library.images.length) return '';
     var opts = '<option value="">Use a backup instead\u2026</option>' + S.library.images.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
-    return '<select class="small" data-useimage="' + name + '"' + (S.running ? ' disabled' : '') + '>' + opts + '</select>';
+    return '<select class="small" data-useimage="' + name + '"' + (S.busy ? ' disabled' : '') + '>' + opts + '</select>';
   }
-  function canBackup(d) { return !S.running && S.identified && d.disk && !(S.job.name && !S.job.done); }
+  function canBackup(d) { return !S.busy && S.identified && d.disk; }
   function jobText(name) {
     var j = S.job; if (!j.name || j.name !== name) return "";
     if (!j.done) return "reading track " + j.track + " of " + j.total;
     if (j.error) return "failed: " + esc(j.error);
-    return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.backup_dir);
+    return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.library.folder);
   }
   function render() {
     $("sys").textContent = S.system + " \u00b7 " + (S.board.port || (S.running ? "in use by the bridge" : "no board"));
@@ -179,10 +183,12 @@ a { color: var(--cyan); }
     var ss = $("startstop");
     ss.textContent = S.running ? "STOP" : "START";
     var allImages = !!(S.drives.FD1.image && S.drives.FD2.image);
-    ss.disabled = !S.running && !allImages && (!S.identified || !S.driver.ok || !S.board.present);
-    $("driverbox").hidden = S.driver.ok || allImages;
-    $("probe").disabled = S.running;
-    $("swap").disabled = S.running || !S.identified;
+    ss.disabled = (!S.running && S.busy) || (!S.running && !allImages && (!S.identified || !S.driver.ok || !S.board.present));
+    $("driverbox").hidden = S.driver.ok || allImages || !S.driver.checked;
+    $("probe").disabled = S.busy;
+    $("swap").disabled = S.busy || !S.identified;
+    $("identify").disabled = S.busy;
+    $("footnote").textContent = S.tray ? "Closing this window hides it; Quit in the tray icon ends the program." : "Closing this window ends the program once the bridge is stopped.";
     $("emuline").innerHTML = S.emulator.custom ? "your own command" :
       S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" : '<b class="bad">RetroArch with the PC-98 core not found</b>; open the two files in your emulator';
     $("play").disabled = !(S.running && S.ready && (S.emulator.found || S.emulator.custom));
@@ -193,31 +199,33 @@ a { color: var(--cyan); }
     $("ready").textContent = S.running ? (S.ready ? "RUNNING" : "WAIT") : "READY";
     $("files").textContent = S.running ? "play.cmd: " + S.play : "";
     $("ver").textContent = "v" + S.version;
-    if (S.message && !$("msg").textContent) $("msg").textContent = S.message;
+    if (S.message !== lastServerMsg) { lastServerMsg = S.message; $("msg").textContent = S.message || ""; }
   }
+  var lastServerMsg = null;
   function refresh() {
-    return fetch("/api/state", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (s) { S = s; render(); })
-      .catch(function () { $("bstate").textContent = "the program has closed"; $("bstate").className = "bad"; });
+    return fetch("/api/state", { cache: "no-store", headers: { "X-Token": TOKEN } })
+      .then(function (r) { if (!r.ok) throw new Error("state " + r.status); return r.json(); })
+      .then(function (s) { S = s; try { render(); } catch (e) { console.error(e); } },
+            function () { $("bstate").textContent = "the program has closed; start it again and reload"; $("bstate").className = "bad"; });
   }
   document.addEventListener("click", function (e) {
     var t = e.target.closest("button"); if (!t) return;
     if (t.dataset.post) { $("msg").textContent = ""; post(t.dataset.post); }
     else if (t.dataset.copy) {
-      var label = t.textContent;
-      navigator.clipboard.writeText(t.dataset.copy).then(function () { t.textContent = "Copied"; setTimeout(function () { t.textContent = label; }, 1200); },
-                                                          function () { t.textContent = "Select it"; setTimeout(function () { t.textContent = label; }, 1200); });
+      navigator.clipboard.writeText(t.dataset.copy).then(function () { $("msg").textContent = "copied"; }, function () { $("msg").textContent = "copying isn't allowed here; select the text instead"; });
     }
     else if (t.id === "startstop") { $("msg").textContent = S.running ? "stopping" : "starting"; post(S.running ? "/api/stop" : "/api/start"); }
     else if (t.dataset.usedrive) { var im = {}; im[t.dataset.usedrive] = ""; post("/api/settings", { image: im }); }
     else if (t.id === "play") { post("/api/launch"); }
     else if (t.dataset.backup) { post("/api/backup", { name: t.dataset.backup }); }
-    else if (t.id === "identify") { $("identmsg").textContent = "checking"; post("/api/identify").then(function (j) { $("identmsg").textContent = j.message || ""; }); }
+    else if (t.id === "identify") { $("identmsg").textContent = "checking"; post("/api/identify", {}, true).then(function (j) { $("identmsg").textContent = j.message || ""; }); }
     else if (t.id === "swap") { post("/api/settings", { swap: true }); }
     else if (t.id === "savecmd") { post("/api/settings", { emulator_command: $("emucmd").value }); }
   });
   document.addEventListener("change", function (e) {
     var sel = e.target.closest("select[data-useimage]"); if (!sel || !sel.value) return;
-    var im = {}; im[sel.dataset.useimage] = sel.value; post("/api/settings", { image: im });
+    var im = {}; im[sel.dataset.useimage] = sel.value; sel.blur();
+    post("/api/settings", { image: im }).then(function (j) { if (!j || j.message !== "saved") sel.value = ""; });
   });
   window.addEventListener("pagehide", function () {
     try { navigator.sendBeacon("/api/bye", new Blob([JSON.stringify({ token: TOKEN })], { type: "application/json" })); } catch (e) {}

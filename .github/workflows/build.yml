@@ -50,6 +50,9 @@ jobs:
           - os: macos-14
             name: macos
             artifact: dist/pc98-floppy-station-macos.zip
+          - os: macos-13
+            name: macos-intel
+            artifact: dist/pc98-floppy-station-macos.zip
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -69,7 +72,7 @@ jobs:
       - name: Build
         run: pyinstaller station.spec
       - name: Zip the Mac app
-        if: matrix.name == 'macos'
+        if: startsWith(matrix.name, 'macos')
         run: cd dist && ditto -c -k --keepParent "PC-98 Floppy Station.app" pc98-floppy-station-macos.zip
       - uses: actions/upload-artifact@v4
         with:
@@ -94,8 +97,10 @@ jobs:
           cp out/pc98-floppy-station-linux/pc98-floppy-station release/pc98-floppy-station-linux
           cp out/pc98-floppy-station-windows/pc98-floppy-station.exe release/pc98-floppy-station-windows.exe
           cp out/pc98-floppy-station-macos/pc98-floppy-station-macos.zip release/pc98-floppy-station-macos.zip
+          cp out/pc98-floppy-station-macos-intel/pc98-floppy-station-macos.zip release/pc98-floppy-station-macos-intel.zip
           ls -la release
       - uses: softprops/action-gh-release@v2
         with:
           files: release/*
+          fail_on_unmatched_files: true
           generate_release_notes: true

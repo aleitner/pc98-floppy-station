@@ -128,6 +128,13 @@ class BridgeFS(mfusepy.Operations):
             status(f"{slot.name}: saving {n} track(s)")
             try:
                 self._refresh(slot, force=True)      # a swap must never write to the wrong disk
+            except Exception as e:
+                status(f"error {slot.name}: couldn't check the drive before saving ({e}); will retry")
+                return False
+            if slot.disk.dirty_tracks == 0:
+                status(f"{slot.name}: nothing saved: the disk had been changed")
+                return True
+            try:
                 slot.disk.flush_to_disk()
             except DiskError as e:
                 status(f"error {slot.name}: {e.strerror}")
@@ -154,17 +161,18 @@ class BridgeFS(mfusepy.Operations):
     def getattr(self, path: str, fh: Optional[int] = None) -> Dict[str, Any]:
         if self.quit.is_set():
             mfusepy.fuse_exit()               # only valid from inside a FUSE call, hence here
-        base = dict(st_uid=self.uid, st_gid=self.gid, st_atime=self.started, st_ctime=self.started)
+        started = int(self.started * 1e9)             # use_ns: everything in nanoseconds
+        base = dict(st_uid=self.uid, st_gid=self.gid, st_atime=started, st_ctime=started)
         if path == "/":
-            return dict(base, st_mode=stat.S_IFDIR | 0o755, st_nlink=2, st_size=0, st_mtime=self.started)
+            return dict(base, st_mode=stat.S_IFDIR | 0o755, st_nlink=2, st_size=0, st_mtime=started)
         if path == "/play.cmd":
             return dict(base, st_mode=stat.S_IFREG | 0o444, st_nlink=1, st_size=len(self.play_cmd),
-                        st_mtime=self.started)
+                        st_mtime=started)
         slot = self._slot(path)
         self._run(slot, lambda: None)
         mode = 0o444 if slot.protected else 0o644     # how an emulator learns of the write notch
         return dict(base, st_mode=stat.S_IFREG | mode, st_nlink=1, st_size=slot.disk.size,
-                    st_mtime=slot.changed_at)
+                    st_mtime=int(slot.changed_at * 1e9))
 
     def readdir(self, path: str, fh: int) -> List[str]:
         return [".", "..", "play.cmd"] + [p[1:] for p in self.slots]
@@ -223,6 +231,12 @@ class BridgeFS(mfusepy.Operations):
 
     def release(self, path: str, fh: int) -> int:
         return 0
+
+
+def slot_logger(name: str) -> Callable[[str], None]:
+    def log(msg: str) -> None:
+        status(f"{name}: {msg}")
+    return log
 
 
 def disk_state(slot: Slot) -> str:
@@ -299,7 +313,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 backends[name] = GwBackend(wanted[name], args.format, board=board,
                                            cyl_offset=offsets.get(wanted[name], 0))
         for name, backend in backends.items():
-            slot = Slot(name, backend, TrackDisk(backend))
+            slot = Slot(name, backend, TrackDisk(backend, log=slot_logger(name)))
             slot.protected = backend.write_protected()
             slots[f"/{name}{ext}"] = slot
             where = images.get(name) or f"drive {wanted[name]}"
@@ -317,6 +331,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         threading.Thread(target=watch_stdin, args=(ops, mountpoint), daemon=True).start()
     try:
         mfusepy.FUSE(ops, mountpoint, foreground=True, nothreads=True, **mount_options("pc98drives"))
+    except Exception as e:
+        status(f"error couldn't mount {mountpoint}: {e}")
+        return 2
     finally:
         for s in slots.values():
             s.backend.close()

@@ -44,4 +44,5 @@ exe = EXE(
 if sys.platform == "darwin":
     app = BUNDLE(exe, name="PC-98 Floppy Station.app", icon="icon.icns",
                  bundle_identifier="net.pc98floppystation.app",
-                 info_plist={"NSHighResolutionCapable": True, "LSMinimumSystemVersion": "11.0"})
+                 info_plist={"NSHighResolutionCapable": True, "LSMinimumSystemVersion": "11.0",
+                             "CFBundleShortVersionString": "0.2.0", "CFBundleVersion": "0.2.0"})

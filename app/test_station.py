@@ -68,22 +68,39 @@ def main() -> int:
                          stdout=log, stderr=subprocess.STDOUT, env=env)
     url = ""
     try:
+        starts = 1
+
         def got_url() -> bool:
+            # the log keeps every address ever printed; the newest server is the last one
             nonlocal url
             log.flush()
-            mt = re.search(r"http://[^\s]+", open(log.name).read())
-            url = mt.group(0) if mt else ""
+            found = re.findall(r"http://[^\s]+", open(log.name).read())
+            url = found[-1] if len(found) >= starts else ""
             return bool(url)
         check(wait_for(got_url), "server starts and prints its address")
-
-        def get(path: str) -> Dict[str, Any]:
-            with urllib.request.urlopen(url + path, timeout=5) as r:
-                return dict(json.loads(r.read()))
 
         page = urllib.request.urlopen(url, timeout=5).read().decode()
         tok = re.search(r'TOKEN = "([^"]+)"', page)
         check(tok is not None and "__TOKEN__" not in page, "page carries its token")
         token = tok.group(1) if tok else ""
+
+        def get(path: str, with_token: bool = True) -> Dict[str, Any]:
+            req = urllib.request.Request(url + path, headers={"X-Token": token} if with_token else {})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return dict(json.loads(r.read()))
+
+        check(get("api/ping", with_token=False).get("app") == "PC-98 Floppy Station", "ping answers without a token")
+        try:
+            get("api/state", with_token=False)
+            check(False, "state needs the token")
+        except urllib.error.HTTPError as e:
+            check(e.code == 403, "state needs the token")
+        wrong = urllib.request.Request(url + "api/ping", headers={"Host": "evil.example:9801"})
+        try:
+            urllib.request.urlopen(wrong, timeout=5)
+            check(False, "a request for another host name is refused")
+        except urllib.error.HTTPError as e:
+            check(e.code == 421, "a request for another host name is refused")
 
         def post(path: str, body: Dict[str, Any]) -> Dict[str, Any]:
             data = json.dumps(body).encode()
@@ -94,6 +111,7 @@ def main() -> int:
         s = get("api/state")
         check(s.get("app") == "PC-98 Floppy Station" and bool(s.get("version")), "state names the program and version")
         check(s["running"] is False, "idle at start")
+        check(wait_for(lambda: get("api/state")["driver"]["checked"] is True, 60), "driver check finishes")
         check(s["library"]["images"] == ["TEST-No1.hdm", "TEST-No2.hdm"], "the library lists its images")
 
         bad = urllib.request.Request(url + "api/start", data=b"{}", headers={"Content-Type": "application/json"})
@@ -129,15 +147,42 @@ def main() -> int:
         with open(fd2, "r+b", buffering=0) as f:
             f.seek(40 * 1024)
             f.write(save)
-        check(wait_for(lambda: open(b, "rb").read()[40 * 1024:41 * 1024] == save, 5), "a save reaches the image")
-        check(open(b, "rb").read()[:40 * 1024] == db[:40 * 1024], "the rest of the image is untouched")
+        time.sleep(0.5)
+        check(open(b, "rb").read() == db, "the library image is untouched while playing (the copy holds the save)")
         check("stop before changing" in post("api/settings", {"image": {"FD1": ""}})["message"],
               "images can't be changed while running")
 
         check(post("api/stop", {}).get("message") == "stopped", "stop accepted")
         check(wait_for(lambda: get("api/state")["running"] is False), "stopped")
         check(not os.path.lexists(fd1) and not os.path.lexists(fd2), "files gone after stop")
-        check(open(b, "rb").read()[40 * 1024:41 * 1024] == save, "the save stays in the library image")
+        after = open(b, "rb").read()
+        check(after[40 * 1024:41 * 1024] == save and after[:40 * 1024] == db[:40 * 1024], "the save is written back to the library image on stop")
+        check(open(a, "rb").read() == da, "the protected image is untouched")
+
+        # a run that never reached Stop: leftover copy with changes is written back at the next start
+        check(post("api/start", {}).get("message") == "starting", "start again")
+        check(wait_for(lambda: get("api/state")["ready"] is True), "ready again")
+        crash_save = b"CRASHSAV" * 128
+        with open(fd2, "r+b", buffering=0) as f:
+            f.seek(60 * 1024)
+            f.write(crash_save)
+        p.kill()
+        p.wait(10)
+        check(os.path.isfile(fd2), "the changed copy survives a crash")
+        log.flush()
+        p = subprocess.Popen([sys.executable, os.path.join(HERE, "station.py"), "--no-browser"],
+                             stdout=log, stderr=subprocess.STDOUT, env=env)
+        url = ""
+        starts = 2
+        check(wait_for(got_url), "server starts again")
+        page = urllib.request.urlopen(url, timeout=5).read().decode()
+        tok = re.search(r'TOKEN = "([^"]+)"', page)
+        token = tok.group(1) if tok else ""
+        check(post("api/start", {}).get("message") == "starting", "start after the crash")
+        check(wait_for(lambda: get("api/state")["ready"] is True), "ready after the crash")
+        check(open(b, "rb").read()[60 * 1024:61 * 1024] == crash_save, "the crashed run's save was recovered into the image")
+        check(open(fd2, "rb").read()[60 * 1024:61 * 1024] == crash_save, "and the new copy starts from it")
+        check(post("api/stop", {}).get("message") == "stopped", "stop again")
 
         check(post("api/settings", {"image": {"FD1": "", "FD2": ""}})["message"] == "saved", "back to the drives")
         s = get("api/state")

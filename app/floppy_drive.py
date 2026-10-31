@@ -152,9 +152,22 @@ class GwBackend:
         self._active = False
         self._last_use = 0.0
         self._ticks_per_rev = 0.0
-        self._changed = False
+        self._changed = False        # a swap not yet acknowledged by poll_change()
         self._new_change = False
         self._empty = False
+        self._pins = self._pins_supported()
+
+    def _pins_supported(self) -> bool:
+        """Can this firmware read input pins? Decided once, so a later read error is an error."""
+        with self._lock:
+            self._select()
+            try:
+                self._usb.get_pin(34)
+                return True
+            except Exception:
+                return False
+            finally:
+                self._deselect()
 
     # selection and motor --------------------------------------------------
     def _select(self) -> None:
@@ -174,26 +187,30 @@ class GwBackend:
         if self._active:
             return
         self._usb.drive_motor(self._drive.unit_id, True)
+        try:
+            if not self._ticks_per_rev:
+                self._ticks_per_rev = float(self._usb.read_track(2).ticks_per_rev)
+            self._check_change()
+        except Exception:
+            self._usb.drive_motor(self._drive.unit_id, False)   # no disk, or no answer: not active
+            raise
         self._active = True
-        if not self._ticks_per_rev:
-            self._ticks_per_rev = float(self._usb.read_track(2).ticks_per_rev)
-        self._check_change()
 
     def _check_change(self) -> None:
-        """Pin 34 is DISK CHANGE (DC jumper): low after the door opens, until the next step."""
-        try:
-            if not self._usb.get_pin(34):
-                # a step clears the latch; if it reads low again there is no disk at all
-                self._usb.seek(1, 0)
-                self._usb.seek(0, 0)
-                self._empty = not self._usb.get_pin(34)
-                if self._last_use:
-                    self._changed = True
-                    self._new_change = True
-            else:
-                self._empty = False
-        except Exception:
-            pass   # older firmware without pin reads: no detection, nothing else breaks
+        """Pin 34 is DISK CHANGE (DC jumper): low after the door opens, until the next step.
+        A failed pin read is an error, not "no change": the caller must not write on it."""
+        if not self._pins:
+            return                       # older firmware without pin reads: no detection
+        if not self._usb.get_pin(34):
+            # a step clears the latch; if it reads low again there is no disk at all
+            self._usb.seek(1, 0)
+            self._usb.seek(0, 0)
+            self._empty = not self._usb.get_pin(34)
+            if self._last_use:
+                self._changed = True
+                self._new_change = True
+        else:
+            self._empty = False
 
     def idle(self) -> None:
         with self._lock:
@@ -203,20 +220,26 @@ class GwBackend:
                 self._active = False
 
     def disk_changed(self) -> bool:
+        """A swap happened that poll_change() hasn't acknowledged yet. Read fresh."""
         with self._lock:
-            if self._active:
-                self._check_change()
+            self._select()
+            self._check_change()
+            if not self._active:
+                self._deselect()
             return self._changed
 
     def poll_change(self) -> bool:
-        """True once per disk change. Works with the motor off, so a swap is seen even
-        when everything being read is already in the cache."""
+        """True once per disk change, and acknowledges it: the caller starts over with the
+        new disk. Works with the motor off, so a swap is seen even when everything being
+        read is already in the cache."""
         with self._lock:
             self._select()
             self._check_change()
             if not self._active:
                 self._deselect()
             new, self._new_change = self._new_change, False
+            if new:
+                self._changed = False
             return new
 
     def has_disk(self) -> bool:
@@ -232,9 +255,7 @@ class GwBackend:
         with self._lock:
             self._select()
             try:
-                return not self._usb.get_pin(28)
-            except Exception:
-                return False
+                return not self._pins or not self._usb.get_pin(28)
             finally:
                 if not self._active:
                     self._deselect()
@@ -243,6 +264,9 @@ class GwBackend:
     def read_track(self, cyl: int, head: int) -> Optional[bytes]:
         with self._lock:
             self._activate()
+            self._check_change()         # a seek would clear the latch: look before every one
+            if self._changed:
+                return None              # whatever is in the drive now isn't the disk being read
             self._last_use = time.monotonic()
             self._usb.seek(cyl + self._cyl_offset, head)
             self._ticks_per_rev = self._ticks_per_rev or float(self._usb.read_track(2).ticks_per_rev)
@@ -270,6 +294,10 @@ class GwBackend:
         from greaseweazle.track import MasterTrack
         with self._lock:
             self._activate()
+            self._check_change()         # never write to a disk that was just swapped in
+            if self._changed:
+                return False
+            assert self._ticks_per_rev > 0
             self._last_use = time.monotonic()
             t = self._disk.mk_track(cyl, head)
             assert t is not None
@@ -388,6 +416,8 @@ class TrackDisk(io.RawIOBase):
         with self._lock:
             if self.broken:
                 raise DiskError(5, self.broken)
+            if self.b.disk_changed():
+                raise DiskError(5, "the disk was changed; this write belongs to the old disk")
             if not self.verified:
                 # Before the first write, track 0 must decode with the sector headers the
                 # decoder expects. That proves this drive's track 0 is the disk's track 0; a

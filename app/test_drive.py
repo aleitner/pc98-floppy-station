@@ -43,11 +43,11 @@ class FakeDrive:
         return True
 
     def disk_changed(self) -> bool:
-        c, self.changed = self.changed, False
-        return c
+        return self.changed
 
     def poll_change(self) -> bool:
-        return self.disk_changed()
+        c, self.changed = self.changed, False
+        return c
 
     def has_disk(self) -> bool:
         return True
@@ -99,6 +99,24 @@ def main() -> int:
         check(False, "flush refused when the disk changed underneath")
     except DiskError:
         check(disk.broken is not None, "flush refused when the disk changed underneath")
+
+    # 4b. Once the swap is acknowledged and the disk started over, saving to the NEW disk works.
+    check(d.poll_change() is True and d.poll_change() is False, "a swap is reported once, then acknowledged")
+    disk.new_disk()
+    disk.seek(2 * 1024)
+    disk.write(b"n" * 8)
+    check(disk.flush_to_disk() == 1 and d.data[(1, 0)][:8] == b"n" * 8, "saves after a swap reach the new disk")
+
+    # 4c. A swap noticed between write and flush refuses the write too.
+    d.changed = True
+    try:
+        disk.seek(0)
+        disk.write(b"late")
+        check(False, "a write after an unacknowledged swap is refused")
+    except DiskError:
+        check(True, "a write after an unacknowledged swap is refused")
+    d.poll_change()
+    disk.new_disk()
 
     # 5. A write that can't be verified marks the disk broken; later writes are refused.
     d2 = FakeDrive()
