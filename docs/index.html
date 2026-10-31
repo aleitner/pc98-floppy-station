@@ -296,11 +296,11 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
   <h3>Download</h3>
   <div class="table"><table>
     <tr><th>System</th><th>Program</th><th>Driver, for playing from the drives</th><th>First start</th></tr>
-    <tr><td>Windows</td><td><a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-windows.exe">pc98-floppy-station-windows.exe</a></td><td><a href="https://winfsp.dev/rel/">WinFsp</a></td><td>Windows may warn about an unknown publisher: <em>More info</em>, then <em>Run anyway</em>.</td></tr>
-    <tr><td>macOS</td><td><a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-macos.zip">Apple silicon</a> · <a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-macos-intel.zip">Intel</a></td><td><a href="https://www.fuse-t.org/">FUSE-T</a></td><td>Unsigned: open it once, let macOS refuse, then allow it under <em>Privacy &amp; Security → Open Anyway</em>. If macOS calls it damaged, <code>xattr -dr com.apple.quarantine</code> on the app first.</td></tr>
     <tr><td>Linux</td><td><a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux">pc98-floppy-station-linux</a></td><td><code>fuse3</code> from your distribution</td><td><code>chmod +x</code> the file, then run it. The window opens in your browser.</td></tr>
+    <tr><td>Windows</td><td>not yet</td><td><a href="https://winfsp.dev/rel/">WinFsp</a></td><td>Built, not yet tried on a real machine; released once it has been.</td></tr>
+    <tr><td>macOS</td><td>not yet</td><td><a href="https://www.fuse-t.org/">FUSE-T</a></td><td>Built for Apple silicon and Intel, not yet tried on a real Mac; same.</td></tr>
   </table></div>
-  <p>One file. The driver is needed to play from the drives; a backup chosen for both drives plays without it. The Windows and Mac files are built by GitHub and have not been tried on a real machine yet; say so if one misbehaves. All versions are on the <a href="https://github.com/aleitner/pc98-floppy-station/releases">releases page</a>.</p>
+  <p>One file. The driver is needed to play from the drives; a backup chosen for both drives plays without it. Linux is where it has been developed and tested. All versions are on the <a href="https://github.com/aleitner/pc98-floppy-station/releases">releases page</a>.</p>
   <h3>From source instead</h3>
   <pre><code>python3 -m pip install mfusepy pywebview git+https://github.com/keirf/greaseweazle@latest
 python3 app/station.py</code></pre>
@@ -338,7 +338,7 @@ python3 app/station.py</code></pre>
     <li><a href="https://cults3d.com/:5146826">Cults3D page</a>: the print pack, free.</li>
     <li><a href="https://github.com/aleitner/pc98-floppy-station/tree/main/print">Print files on GitHub</a>: the same STLs, both layouts, with the print README.</li>
     <li><a href="https://github.com/aleitner/pc98-floppy-station/blob/main/pc98_disk_unit.scad">Model source</a>: OpenSCAD, every fit number is a named line near the top.</li>
-    <li>Software downloads: <a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-windows.exe">Windows</a>, <a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-macos.zip">macOS</a>, <a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux">Linux</a>; <a href="https://github.com/aleitner/pc98-floppy-station/tree/main/app">source and guide</a>.</li>
+    <li>Software download: <a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux">Linux</a> (Windows and macOS once tested); <a href="https://github.com/aleitner/pc98-floppy-station/tree/main/app">source and guide</a>.</li>
     <li><a href="https://github.com/aleitner/pc98-floppy-station/blob/main/PARTS.md">Parts list</a> as a file.</li>
   </ul>
   <h3>Licence</h3>
