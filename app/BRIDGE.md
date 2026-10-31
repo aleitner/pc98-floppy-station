@@ -77,6 +77,21 @@ Settings are kept in `~/.config/pc98-floppy-station/settings.json` (Linux), with
 `%APPDATA%\PC-98 Floppy Station` (Windows) or `~/Library/Application Support/PC-98 Floppy Station` (macOS).
 A drive whose track 0 has drifted (below) gets its steps there too: `"offsets": {"B": 4}`.
 
+## What protects your disks
+
+- A covered write notch is enforced by the drive itself. The bridge also shows such a disk as
+  a read-only file, so an emulator never tries.
+- The first write to a disk is only accepted after the drive has read that disk's track 0 with
+  the headers the decoder expects. A drive whose home position has slipped is refused.
+- Every written track is read back. If it doesn't match, the disk is marked broken and no more
+  writes go to it.
+- Changes that haven't reached the disk yet are never written to a disk swapped in underneath them.
+- Backup only reads. The bridge writes only tracks the emulator changed.
+
+Software can't protect against a dirty or damaged head, which scratches a disk in a few passes.
+Clean both heads with 90 % or stronger isopropyl alcohol and let them dry, test on a blank, and
+read an original once.
+
 ## The bridge on its own
 
     python3 floppy_bridge.py

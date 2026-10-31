@@ -109,14 +109,12 @@ ol.steps li::marker { color: var(--yellow); }
 ul li::marker { color: var(--green); }
 strong { color: var(--yellow); font-weight: 400; }
 em { color: var(--green); font-style: normal; }
-code, pre {
+code {
   font-family: var(--mono);
   background: var(--field-deep);
   color: #fff;
+  padding: 1px 6px;
 }
-code { padding: 1px 6px; }
-pre { padding: 12px 14px; overflow-x: auto; margin: 0 0 14px; border-left: 4px solid var(--green); max-width: 100%; }
-pre code { padding: 0; background: none; }
 figure { margin: 0 0 18px; max-width: 760px; }
 figure img { display: block; width: 100%; height: auto; border: 2px solid var(--frame); }
 figcaption { color: var(--ink-dim); font-size: 15px; margin-top: 6px; }
@@ -135,9 +133,6 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 }
 .box.warn { border-color: #ff8080; }
 .box.warn strong { color: #ff8080; }
-.status { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; max-width: 66ch; margin: 0 0 14px; font-size: 16.5px; }
-.status b { font-weight: 400; color: var(--green); }
-.status b.no { color: #ff9c9c; }
 
 footer {
   margin-top: 26px;
@@ -177,13 +172,12 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
 <div class="layout">
 <nav aria-label="Pages">
   <ol id="menu">
-    <li><button type="button" data-page="about"><span class="n">1.</span><span>What it is</span></button></li>
-    <li><button type="button" data-page="parts"><span class="n">2.</span><span>Parts to buy</span></button></li>
-    <li><button type="button" data-page="print"><span class="n">3.</span><span>Printing</span></button></li>
-    <li><button type="button" data-page="build"><span class="n">4.</span><span>Building</span></button></li>
-    <li><button type="button" data-page="software"><span class="n">5.</span><span>Software</span></button></li>
-    <li><button type="button" data-page="disks"><span class="n">6.</span><span>Caring for disks</span></button></li>
-    <li><button type="button" data-page="download"><span class="n">7.</span><span>Files and licence</span></button></li>
+    <li><button type="button" data-page="about"><span class="n">0.</span><span>What it is</span></button></li>
+    <li><button type="button" data-page="print"><span class="n">1.</span><span>Print</span></button></li>
+    <li><button type="button" data-page="parts"><span class="n">2.</span><span>Buy parts</span></button></li>
+    <li><button type="button" data-page="build"><span class="n">3.</span><span>Put together</span></button></li>
+    <li><button type="button" data-page="software"><span class="n">4.</span><span>Get the bridge</span></button></li>
+    <li><button type="button" data-page="run"><span class="n">5.</span><span>Run</span></button></li>
   </ol>
   <p class="hint"><kbd>↑</kbd> <kbd>↓</kbd> move, <kbd>Enter</kbd> opens.<br>Or press a number.</p>
 </nav>
@@ -194,160 +188,87 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
   <h2>What it is <small>ごあんない</small></h2>
   <figure>
     <img src="img/1_portrait_front.png" alt="The printed unit: a beige box with two 5.25-inch drive openings on the front, drawn on a blue field in the style of a PC-98 setup screen." width="2400" height="1800">
-    <figcaption>Side-by-side layout, 102.4 × 157.0 × 285 mm.</figcaption>
   </figure>
-  <p>A 3D-printed box that holds two TEAC FD-55GFR 5.25" floppy drives and a Greaseweazle V4, so one USB cable gives a modern computer two real PC-98 floppy drives.</p>
-  <p>With the Greaseweazle's own tools you can read a disk to an image file, write an image to a blank and copy a game set disk by disk. With the bridge from this project you can run a game in an emulator while the disks stay in the drives, swapping them when the game asks, the way the real machine did.</p>
-  <p>Two layouts come from the same model: <strong>side by side</strong>, drives on edge like the PC-80S31 and X68000 drive units, or <strong>stacked</strong>, drives flat like a PC-9801 desktop. Same hardware, same screws.</p>
-  <p>The model is on <a href="https://cults3d.com/:5146826">Cults3D</a>, the model source, print files and software are on <a href="https://github.com/aleitner/pc98-floppy-station">GitHub</a>. Everything here is free to print and share with credit, not for sale.</p>
-</section>
-
-<section id="parts">
-  <h2>Parts to buy <small>部品リスト</small></h2>
-  <p>Everything for one unit, with the shops used. Prices change, so none are given.</p>
-  <div class="table"><table>
-    <tr><th>Part</th><th>Qty</th><th>Where</th><th>Notes</th></tr>
-    <tr><td>TEAC FD-55GFR drive</td><td class="num">2</td><td>eBay</td><td>This exact model: the shell is sized to its frame and bezel. "Untested" is normal; check each drive before building around it (see <em>Caring for disks</em>).</td></tr>
-    <tr><td>Greaseweazle V4.1</td><td class="num">1</td><td><a href="https://decromancer.ca/greaseweazle/">decromancer.ca</a></td><td>The USB floppy controller, with the 34-pin header the ribbon plugs into.</td></tr>
-    <tr><td>5 V / 12 V power supply</td><td class="num">1</td><td><a href="https://shop.deviceside.com/prod/PSU5">deviceside PSU5</a></td><td>Floppy-drive Molex power.</td></tr>
-    <tr><td>Y power cable</td><td class="num">1</td><td><a href="https://shop.deviceside.com/prod/YCABLE">deviceside YCABLE</a></td><td>Splits the supply to both drives.</td></tr>
-    <tr><td>34-pin ribbon, twisted, 36"</td><td class="num">1</td><td><a href="https://www.cablesonline.com/36unflopdriv.html">cablesonline</a></td><td>Card-edge connectors for 5.25" drives. The twist makes the two drives A and B.</td></tr>
-    <tr><td>USB-C cable</td><td class="num">1</td><td><a href="https://www.amazon.com/dp/B06XMY49BM">Amazon</a></td><td>Board to computer, through the notch in the rear door.</td></tr>
-    <tr><td>6-32 × 3/8" pan-head screws</td><td class="num">4 or 8</td><td><a href="https://www.amazon.com/dp/B0G6ZSQGT9">Amazon</a></td><td>Hold the drives: two per drive through the floor side by side, four per drive through the side walls stacked.</td></tr>
-    <tr><td>#6 flat washers</td><td class="num">4 or 8</td><td><a href="https://www.amazon.com/dp/B0CM3MCSGS">Amazon</a></td><td>Under the drive screw heads.</td></tr>
-    <tr><td>M2.5 × 10 screws</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0G58L9P4G">Amazon</a></td><td>Greaseweazle to its posts.</td></tr>
-    <tr><td>M2.5 hex nuts</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0FMRGFZP4">Amazon</a></td><td>Pressed into the pockets under the floor.</td></tr>
-    <tr><td>Rubber bumper feet</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B074PXFWPK">Amazon</a></td><td>Into the recesses underneath.</td></tr>
-    <tr><td>PETG filament</td><td class="num">≈1.1 kg</td><td>any</td><td>Printed on a Prusa MK4S.</td></tr>
-  </table></div>
-  <p>Also useful: isopropyl alcohol, 90 % or stronger, cotton swabs, and a few blank 5.25" HD disks for testing drives before any original goes in.</p>
+  <p>A 3D-printed box for two TEAC FD-55GFR floppy drives and a Greaseweazle. Plug it into a computer and play PC-98 games in an emulator from the real disks.</p>
+  <p>Start at step <strong>1</strong> and follow the menu down.</p>
+  <p>Free to print and share with credit, not for sale: <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a> for the model and guides, <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/LICENSE">MIT</a> for the software. <a href="https://github.com/aleitner/pc98-floppy-station">Everything is on GitHub</a>.</p>
 </section>
 
 <section id="print">
-  <h2>Printing <small>プリント</small></h2>
-  <p>Pick <strong>one</strong> folder from the print files. They are two versions of the same box, not ten parts. Five files in each, all in millimetres and already rotated for printing.</p>
+  <h2>Print <small>プリント</small></h2>
+  <p>Download the files from <a href="https://cults3d.com/:5146826">Cults3D</a> or <a href="https://github.com/aleitner/pc98-floppy-station/tree/main/print">GitHub</a>, and pick one of the two layouts. Each has five parts.</p>
   <div class="two">
-    <figure><img src="img/1_portrait_front.png" alt="Side-by-side layout render." loading="lazy" width="2400" height="1800"><figcaption>A, side by side: 102.4 × 157.0 × 285 mm. Taller and narrower.</figcaption></figure>
-    <figure><img src="img/4_landscape_front.png" alt="Stacked layout render." loading="lazy" width="2400" height="1800"><figcaption>B, stacked: 159.0 × 99.8 × 285 mm. Wider and lower.</figcaption></figure>
+    <figure><img src="img/1_portrait_front.png" alt="Side-by-side layout render." loading="lazy" width="2400" height="1800"><figcaption>A, side by side: 102.4 × 157.0 × 285 mm</figcaption></figure>
+    <figure><img src="img/4_landscape_front.png" alt="Stacked layout render." loading="lazy" width="2400" height="1800"><figcaption>B, stacked: 159.0 × 99.8 × 285 mm</figcaption></figure>
   </div>
-  <div class="box warn"><strong>Print everything at 100 %.</strong> The drive openings were already tightened after a test print. Scaling in the slicer would shrink them, and the screw pattern the board bolts to. If the slicer shows a size other than the table below, something has been scaled.</div>
-
-  <h3>Print order: test rings first, it saves a day</h3>
-  <ol class="steps">
-    <li><strong>0a_FIT_TEST_front_ring</strong>, about 1 hour. Push a drive through it from the front, back end first. The metal frame should slide through without forcing, and the beige bezel should drop into the recess and sit flush. Try both drives; bezels vary a little.</li>
-    <li><strong>3_back_panel</strong>, then <strong>0b_FIT_TEST_rear_ring</strong>, about 1.5 hours. Tilt the panel's top away from you, drop its bottom tabs into the slots in the ring's sill, swing the top in until the clips click. It should sit evenly, about 1.5 mm inside the frame.</li>
-    <li>If both fit, print <strong>1_shell_FRONT</strong> and <strong>2_shell_REAR</strong>. If not, stop: the fit numbers are one line each in the model source.</li>
-  </ol>
-
-  <h3>Material and slicer settings</h3>
+  <div class="box warn"><strong>Print at 100 %.</strong> Scaling breaks the fit of the drives and the board.</div>
   <ul>
-    <li><strong>PETG</strong>, not PLA. 0.4 mm nozzle, 0.2 mm layers.</li>
-    <li><strong>Perimeters:</strong> 6 for both shell halves and both test rings, because the screw seats want solid plastic under them. 3 for the back panel. Infill about 20 %.</li>
-    <li><strong>Supports: off.</strong> Every part prints without them. The slicer may flag one small flat spot, the step inside each drive opening that the bezel stops on. Leave it.</li>
-    <li><strong>Seam:</strong> Rear for the shells, it lands on the underside. Aligned for the back panel.</li>
-    <li><strong>Elephant-foot compensation:</strong> keep the profile's default, about 0.2 mm. The front's first layer is the mouth of the drive openings.</li>
-    <li><strong>Brim:</strong> none. Smooth PEI needs glue stick with PETG; satin or textured sheets don't, and the sheet's texture becomes the finish of the front.</li>
-    <li>Largest footprint 160 mm, tallest part 173 mm: any 200 × 200 bed, one part at a time.</li>
+    <li><strong>PETG</strong>, 0.4 mm nozzle, 0.2 mm layers, 20 % infill, no supports, no brim.</li>
+    <li><strong>6 perimeters</strong> for the shells and test rings, 3 for the back panel.</li>
+    <li><strong>Test rings first.</strong> Print <em>0a</em>, <em>3</em> and <em>0b</em>. If a drive slides through the front ring and the panel clicks into the rear ring, print <em>1</em> and <em>2</em>.</li>
   </ul>
+</section>
 
-  <h3>Size check in the slicer</h3>
+<section id="parts">
+  <h2>Buy parts <small>部品リスト</small></h2>
   <div class="table"><table>
-    <tr><th>Part</th><th>Side by side (X × Y × Z mm)</th><th>Stacked (X × Y × Z mm)</th></tr>
-    <tr><td>0a_FIT_TEST_front_ring</td><td class="num">102.4 × 157.0 × 12.0</td><td class="num">159.0 × 99.8 × 12.0</td></tr>
-    <tr><td>0b_FIT_TEST_rear_ring</td><td class="num">102.4 × 157.0 × 27.0</td><td class="num">159.0 × 99.8 × 27.0</td></tr>
-    <tr><td>1_shell_FRONT</td><td class="num">102.4 × 157.0 × 120.0</td><td class="num">159.0 × 99.8 × 120.0</td></tr>
-    <tr><td>2_shell_REAR</td><td class="num">102.4 × 157.0 × 173.0</td><td class="num">159.0 × 99.8 × 173.0</td></tr>
-    <tr><td>3_back_panel</td><td class="num">99.1 × 152.5 × 24.0</td><td class="num">155.7 × 98.0 × 24.0</td></tr>
+    <tr><th>Part</th><th>Qty</th><th>Where</th></tr>
+    <tr><td>TEAC FD-55GFR drive, this exact model</td><td class="num">2</td><td>eBay</td></tr>
+    <tr><td>Greaseweazle V4.1</td><td class="num">1</td><td><a href="https://decromancer.ca/greaseweazle/">decromancer.ca</a></td></tr>
+    <tr><td>5 V / 12 V power supply</td><td class="num">1</td><td><a href="https://shop.deviceside.com/prod/PSU5">deviceside</a></td></tr>
+    <tr><td>Y power cable</td><td class="num">1</td><td><a href="https://shop.deviceside.com/prod/YCABLE">deviceside</a></td></tr>
+    <tr><td>34-pin twisted ribbon, 36"</td><td class="num">1</td><td><a href="https://www.cablesonline.com/36unflopdriv.html">cablesonline</a></td></tr>
+    <tr><td>USB-C cable</td><td class="num">1</td><td><a href="https://www.amazon.com/dp/B06XMY49BM">Amazon</a></td></tr>
+    <tr><td>6-32 × 3/8" pan-head screws</td><td class="num">4 or 8</td><td><a href="https://www.amazon.com/dp/B0G6ZSQGT9">Amazon</a></td></tr>
+    <tr><td>#6 flat washers</td><td class="num">4 or 8</td><td><a href="https://www.amazon.com/dp/B0CM3MCSGS">Amazon</a></td></tr>
+    <tr><td>M2.5 × 10 screws</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0G58L9P4G">Amazon</a></td></tr>
+    <tr><td>M2.5 hex nuts</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0FMRGFZP4">Amazon</a></td></tr>
+    <tr><td>Rubber bumper feet</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B074PXFWPK">Amazon</a></td></tr>
+    <tr><td>PETG filament</td><td class="num">≈1.1 kg</td><td>any</td></tr>
   </table></div>
+  <p>4 screws and washers for side by side, 8 for stacked. For the first run you also need isopropyl alcohol, 90 % or stronger, and cotton swabs.</p>
 </section>
 
 <section id="build">
-  <h2>Building <small>くみたて</small></h2>
-  <figure><img src="img/3_portrait_exploded.png" alt="Exploded render: drives in front, the front shell, the rear shell with the board on its floor, then the door, feet below." loading="lazy" width="2400" height="1800"><figcaption>Front to back: the two drives, the front shell, the rear shell, the door. The board lies on the rear shell's floor.</figcaption></figure>
-  <p>Before any of this, test both drives on a blank disk and clean their heads; see <em>Caring for disks</em>. It's much easier with the drives on the bench than in the box.</p>
+  <h2>Put together <small>くみたて</small></h2>
+  <figure><img src="img/3_portrait_exploded.png" alt="Exploded render: drives in front, the front shell, the rear shell with the board on its floor, then the door, feet below." loading="lazy" width="2400" height="1800"></figure>
   <ol class="steps">
-    <li><strong>Press the four M2.5 nuts</strong> into the hex pockets on the underside of the rear shell, near the back. They're meant to be tight: a flat screwdriver handle or a few light taps puts them home.</li>
-    <li><strong>Lay the Greaseweazle on the four posts</strong> in the rear shell's floor, components up, USB-C socket toward the back, ribbon header toward the drives. It only fits one way. Drive the four M2.5 × 10 screws down through the board into the nuts: snug, not tight.</li>
-    <li><strong>Plug the USB-C cable into the board.</strong> Its plug will sit in the notch at the bottom of the door.</li>
-    <li><strong>Fit the two shells together.</strong> The front half's tongue pushes into the rear half until the hidden tabs click. Stand the box upright.</li>
-    <li><strong>Slide each drive in from the front</strong>, back end first, until its beige bezel drops into the recess, flush with the face. The bezel is wider than the slot, so drives only ever go in and out at the front.</li>
-    <li><strong>Screw the drives down</strong>, a washer under every head. Side by side: two 6-32 screws per drive, up through the floor. Stacked: four per drive, two through each side wall; start all four before tightening any, then tighten alternately so the drive stays centred.</li>
-    <li><strong>Press the shells firmly together</strong> before tightening each drive's rear screw. Snug with a short screwdriver, no wrist: more crushes the plastic. Re-snug after a day or two.</li>
-    <li><strong>Connect the ribbon and power</strong> to the drives: the connector past the twist on one drive, the middle one on the other, the header on the board. The drives' jumpers stay at their factory setting; the twist is what tells them apart.</li>
-    <li><strong>Snap the door on</strong>: hold its top tilted away, drop the two bottom tabs into the slots in the sill, swing the top in and press until the clips click; the side tabs click as it seats.</li>
-    <li><strong>Stick the feet</strong> into the recesses underneath.</li>
+    <li><strong>Press the four M2.5 nuts</strong> into the pockets under the rear shell.</li>
+    <li><strong>Screw the Greaseweazle</strong> onto the four posts, components up, USB-C toward the back. Snug, not tight.</li>
+    <li><strong>Plug in the USB-C cable.</strong></li>
+    <li><strong>Push the two shells together</strong> until they click.</li>
+    <li><strong>Slide each drive in from the front</strong>, back end first, until its bezel sits flush.</li>
+    <li><strong>Screw the drives down</strong>, a washer under every head. Side by side: two per drive, up through the floor. Stacked: four per drive, through the side walls. Hold the shells together while you tighten. Snug, no wrist.</li>
+    <li><strong>Connect the ribbon and power.</strong> The connector past the twist goes to one drive, the middle one to the other. Leave the drives' jumpers alone.</li>
+    <li><strong>Snap the door on</strong>: drop its bottom tabs into the slots, then swing the top in until it clicks.</li>
+    <li><strong>Stick on the feet.</strong></li>
   </ol>
-  <div class="two">
-    <figure><img src="img/2_portrait_rear.png" alt="Rear view render: the door with the USB-C notch at its bottom edge and the power lead's hole." loading="lazy" width="2400" height="1800"><figcaption>The back: USB-C through the notch in the door's bottom edge, power through the hole above it.</figcaption></figure>
-    <figure><img src="img/5_landscape_exploded.png" alt="Stacked layout, exploded: drives, front shell, rear shell, door." loading="lazy" width="2400" height="1800"><figcaption>The stacked layout comes apart the same way; its drive screws go through the side walls.</figcaption></figure>
-  </div>
-  <p>Opening it later: pull the door's top edge out at the finger notch, unplug the cables, undo the drive screws, and push each drive out of the front from behind. If a bezel sits a little proud, shave the step it stops on, 5 mm inside the opening.</p>
 </section>
 
 <section id="software">
-  <h2>Software <small>ソフトウェア</small></h2>
-  <p>Reading, writing and copying disks is done with the <a href="https://github.com/keirf/greaseweazle">Greaseweazle host tools</a> themselves: <code>gw read</code>, <code>gw write</code>, with <code>--format pc98.2hd</code> for PC-98 disks. What this project adds is the bridge, Python on top of those tools. It includes no emulator and no BIOS files: bring your own.</p>
-  <div class="status">
-    <span>A game boots from the real drives</span><b>works, Linux</b>
-    <span>Saving back to the disk, swaps in play</span><b>works, Linux (through the files; not yet in a game)</b>
-    <span>Windows, macOS</span><b class="no">not yet run</b>
-  </div>
-
-  <h3>The bridge</h3>
-  <p>The emulator gets two disk-image files, <code>FD1.hdm</code> and <code>FD2.hdm</code>, that it opens like any other image. The files <em>are</em> the drives: every read goes to the floppy as the game asks, writes go back a second after the game stops writing, and a swap is seen through the drive's own disk-change line. This needs a disk driver: <strong>libfuse</strong> on Linux, usually already there; <strong>WinFsp</strong> on Windows; <strong>FUSE-T</strong> on macOS. The window says if it's missing.</p>
-  <p>Each drive has <strong>Back up this disk</strong>, which reads the disk once into <code>Documents/PC98 Floppies</code>, and <strong>Use a backup instead</strong>, which makes that drive play from one of those images rather than the floppy. Saves go to whatever the drive plays from; an image goes through the same bridge as a drive.</p>
-  <h3>Download</h3>
-  <div class="table"><table>
-    <tr><th>System</th><th>Program</th><th>Driver</th><th>First start</th></tr>
-    <tr><td>Linux</td><td><a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage">pc98-floppy-station-linux.AppImage</a></td><td><code>fuse3</code> from your distribution</td><td>Make it executable (right-click → Properties → Permissions), then double-click. It appears in your menu with its icon after the first start. The window opens in your browser.</td></tr>
-    <tr><td>Windows</td><td>not yet</td><td><a href="https://winfsp.dev/rel/">WinFsp</a></td><td>Built, not yet tried on a real machine; released once it has been.</td></tr>
-    <tr><td>macOS</td><td>not yet</td><td><a href="https://www.fuse-t.org/">FUSE-T</a></td><td>Built for Apple silicon and Intel, not yet tried on a real Mac; same.</td></tr>
-  </table></div>
-  <p>One file, plus the driver. Linux is where it has been developed and tested. All versions are on the <a href="https://github.com/aleitner/pc98-floppy-station/releases">releases page</a>.</p>
-  <h3>From source instead</h3>
-  <pre><code>python3 -m pip install mfusepy git+https://github.com/keirf/greaseweazle@latest
-python3 app/station.py</code></pre>
-  <p>The Greaseweazle package contains C code, so the first line needs a compiler unless a build for your Python already exists.</p>
-  <h3>Use</h3>
-  <p>A window opens, in this same style. The first time, it asks you to put a disk in the <strong>left</strong> drive only and press Check: that's how it learns which unit is which. After that it's <strong>Start</strong>, then <strong>Play</strong> if RetroArch with the Neko Project II kai core is installed, or open the two files in your own emulator's first and second drive. The game boots from whatever disk is in the left drive, as on the real machine; games that want a system disk in one drive and the game in the other work the same way.</p>
-  <p>A disk whose write notch is covered shows as write-protected and its file is read-only, so the game can never write to it. To swap, open the lever, change the disk, close the lever, then answer the game. Wait a couple of seconds after a save before opening a lever. If a disk comes out first, the pending changes are dropped, never written to the next disk, and the log says so.</p>
-  <p>Press <strong>Stop</strong> when you're done; anything unsaved is written first. Closing the window stops the drives the same way and ends the program. Full notes, including the bridge on its own and a flag for a drive whose track 0 has drifted: <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/app/BRIDGE.md">app/BRIDGE.md</a>.</p>
-</section>
-
-<section id="disks">
-  <h2>Caring for disks <small>ディスクのとりあつかい</small></h2>
-  <div class="box warn"><strong>Original disks are irreplaceable.</strong> A drive that has sat for decades has oxide on its heads, and a dirty head scratches a disk in a few passes. Do the three steps below before anything you can't replace goes in.</div>
+  <h2>Get the bridge <small>ソフトウェア</small></h2>
+  <p><a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage"><strong>Download for Linux</strong></a></p>
   <ol class="steps">
-    <li><strong>Clean both heads.</strong> With the drive open, wipe the upper and lower heads with a cotton swab wet with isopropyl alcohol, 90 % or stronger, until a fresh swab comes away clean. Let them dry fully. Black residue on the swab is normal the first time and the reason to do this.</li>
-    <li><strong>Test on a blank.</strong> Write a full disk and read it back on the same drive, then read it on the other drive. A drive that only reads its own writing has a problem of its own.</li>
-    <li><strong>Read an original once.</strong> Make the image, verify it, and put the original away. Play from a copy written to a blank. Tape over the write notch of copies that the game never writes to.</li>
+    <li>Right-click the file, Properties, Permissions, and make it executable.</li>
+    <li>Double-click it. A window opens, and the program is in your menu from then on.</li>
   </ol>
-  <h3>What the software does to protect a disk</h3>
-  <ul>
-    <li>A covered write-protect notch is enforced by the drive itself. The bridge also shows such a disk as a read-only file, so an emulator never tries.</li>
-    <li>The first write to a disk is only accepted after the drive has read the disk's track 0 with the headers the decoder expects. A drive whose home position has slipped fails that test and is refused, instead of writing every track to the wrong place.</li>
-    <li>Every written track is read back. If it doesn't match, the disk is marked broken and no more writes go to it.</li>
-    <li>Changes that haven't reached the disk yet are never written to a disk swapped in underneath them.</li>
-    <li>Backup only reads. The bridge writes only tracks the emulator changed.</li>
-  </ul>
-  <p>What it can't protect against is a dirty or damaged head. That part is the three steps above.</p>
-  <p>Check a disk's surface through the window after a test: hold it to the light and turn the hub. A fine ring where there was none is the drive telling you its head is dirty or damaged. Stop using that drive for anything that matters until it passes a clean test again.</p>
-  <p>Disks go in label up with the lever open, then close the lever; a drive with a disk upside down reports no disk at all. Keep hands and cables off the big round motor disc on the underside while a disk is spinning: anything touching it slows the disk and corrupts reads.</p>
+  <p>You also need <strong>RetroArch</strong> with the <strong>Neko Project II kai</strong> core and your own PC-98 BIOS files. If the window says a disk driver is missing, install <code>fuse3</code>.</p>
+  <p>Windows and macOS versions come once they've been tested on real machines.</p>
 </section>
 
-<section id="download">
-  <h2>Files and licence <small>ファイルとライセンス</small></h2>
-  <ul>
-    <li><a href="https://cults3d.com/:5146826">Cults3D page</a>: the print pack, free.</li>
-    <li><a href="https://github.com/aleitner/pc98-floppy-station/tree/main/print">Print files on GitHub</a>: the same STLs, both layouts, with the print README.</li>
-    <li><a href="https://github.com/aleitner/pc98-floppy-station/blob/main/pc98_disk_unit.scad">Model source</a>: OpenSCAD, every fit number is a named line near the top.</li>
-    <li>Software download: <a href="https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage">Linux</a> (Windows and macOS once tested); <a href="https://github.com/aleitner/pc98-floppy-station/tree/main/app">source and guide</a>.</li>
-    <li><a href="https://github.com/aleitner/pc98-floppy-station/blob/main/PARTS.md">Parts list</a> as a file.</li>
-  </ul>
-  <h3>Licence</h3>
-  <p>The enclosure, its STL files, these pictures and the written guides are under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>: print it, share it, change it, as long as you credit the author, don't sell the files or prints, and share changed versions under the same terms.</p>
-  <p>The software is under the <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/LICENSE">MIT licence</a>.</p>
-  <p>The TEAC FD-55GFR dimensions come from TEAC's published specification. Names of other machines and products belong to their owners.</p>
+<section id="run">
+  <h2>Run <small>スタート</small></h2>
+  <div class="box warn"><strong>Original disks are irreplaceable.</strong> Old drives have dirty heads, and a dirty head scratches a disk in a few passes. Clean both heads with alcohol and a swab, let them dry, and try a disk you can afford to lose first. Then back up each original once and play from the backup or a copy.</div>
+  <ol class="steps">
+    <li><strong>First time only:</strong> put a disk in the left drive only, label up, and press <strong>Check</strong>.</li>
+    <li>Put the game's first disk in the left drive and press <strong>START</strong>.</li>
+    <li>Press <strong>PLAY</strong>.</li>
+    <li>When the game asks for another disk, open the lever, change the disk and close the lever.</li>
+    <li>Press <strong>STOP</strong> when you're done. Anything unsaved is written first.</li>
+  </ol>
+  <p><strong>Back up this disk</strong> saves a copy to <code>Documents/PC98 Floppies</code>. <strong>Use a backup instead</strong> plays from that copy.</p>
+  <p>Wait a couple of seconds after saving before you open a lever. Cover a disk's write notch and the game can't write to it.</p>
+  <p>Something else? <a href="https://github.com/aleitner/pc98-floppy-station/blob/main/app/BRIDGE.md">Full notes</a>.</p>
 </section>
 
 </main>
@@ -363,7 +284,7 @@ python3 app/station.py</code></pre>
 
 <script>
 (function () {
-  var pages = ["about", "parts", "print", "build", "software", "disks", "download"];
+  var pages = ["about", "print", "parts", "build", "software", "run"];
   var buttons = Array.prototype.slice.call(document.querySelectorAll("#menu button"));
   function show(id, focusMain) {
     if (pages.indexOf(id) < 0) id = pages[0];
@@ -390,7 +311,7 @@ python3 app/station.py</code></pre>
     if (cur < 0) cur = 0;
     if (e.key === "ArrowDown" || e.key === "ArrowRight") { show(pages[(cur + 1) % pages.length], true); e.preventDefault(); }
     else if (e.key === "ArrowUp" || e.key === "ArrowLeft") { show(pages[(cur + pages.length - 1) % pages.length], true); e.preventDefault(); }
-    else if (e.key >= "1" && e.key <= "7") { show(pages[Number(e.key) - 1], true); }
+    else if (e.key >= "0" && e.key <= "5") { show(pages[Number(e.key)], true); }
   });
   window.addEventListener("hashchange", function () { show(location.hash.slice(1), false); });
   show(location.hash.slice(1), false);

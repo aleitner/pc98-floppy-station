@@ -1,97 +1,22 @@
 # PC-98 Floppy Station
 
-A 3D-printed twin 5.25" floppy drive unit for NEC PC-98 disks, and the software
-that lets an emulator play straight from the real drives.
+A 3D-printed box for two TEAC FD-55GFR floppy drives and a Greaseweazle. Plug it into a
+computer and play PC-98 games in an emulator from the real disks.
 
 ![The unit, side-by-side layout](docs/img/1_portrait_front.png)
 
-Two TEAC FD-55GFR drives and a Greaseweazle V4 go into one printed box. Plug it
-into any computer over USB and you can read, write and copy PC-98 disks, or run
-a game in an emulator with the disks still in the drives, swapping them when the
-game asks, the way the real machine did.
+**[Build guide](https://aleitner.github.io/pc98-floppy-station/)**
 
-## The box
+1. **Print:** [`print/`](print/) or [Cults3D](https://cults3d.com/:5146826). Pick one layout, print at 100 %.
+2. **Buy parts:** [PARTS.md](PARTS.md).
+3. **Put together:** [the guide](https://aleitner.github.io/pc98-floppy-station/#build).
+4. **Get the bridge:** [download for Linux](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage). Windows and macOS come once they've been tested on real machines.
+5. **Run:** make the file executable and double-click it. You need RetroArch with the Neko Project II kai core and your own PC-98 BIOS files.
 
-- Two layouts from the same model: **side by side** (drives on edge, like the
-  PC-80S31 and X68000 drive units, 102.4 x 157.0 x 285 mm) or **stacked**
-  (drives flat, like a PC-9801 desktop, 159.0 x 99.8 x 285 mm).
-- Two shell halves that push together and click, a snap-on rear door with a notch
-  for the USB-C cable, the Greaseweazle on the floor behind the drives on captive
-  nuts, and recesses for rubber feet. No brackets, clamps or glue.
-- Two fit-test rings so the drive openings can be checked in about an hour before
-  the big parts are printed.
+**Original disks are irreplaceable.** Clean the drive heads first, try a disk you can afford
+to lose, then back up each original once and play from the backup or a copy.
 
-Files: [`print/`](print/) holds the ready-to-print STLs for both layouts and the
-[print README](print/README.txt) with slicer settings and the size table.
-The same pack is on [Cults3D](https://cults3d.com/:5146826).
-[`pc98_disk_unit.scad`](pc98_disk_unit.scad) is the OpenSCAD source.
-
-Parts to buy, with links: [PARTS.md](PARTS.md).
-
-## Download
-
-One file, plus the disk driver for your system. Latest version:
-
-| | Download | Driver | First start |
-|---|---|---|---|
-| Linux | [pc98-floppy-station-linux.AppImage](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux.AppImage) | `fuse3` from your distribution | Make it executable (right-click → Properties → Permissions, or `chmod +x`), then double-click. It appears in your menu with its icon after the first start. The window opens in your browser. |
-| Windows | not yet | [WinFsp](https://winfsp.dev/rel/) | Built, not yet tried on a real machine. It will be released once it has been. |
-| macOS | not yet | [FUSE-T](https://www.fuse-t.org/) | Built for Apple silicon and Intel, not yet tried on a real Mac. Same. |
-
-Plug the unit in, start the program, and a window opens. The first time, put a disk in
-the **left** drive only and press *Check*, so it learns which drive is which. Then
-*Start*, then *Play*. Each drive has a *Back up this disk* button, and a backup can stand
-in for a drive: choose it under *Use a backup instead*, and the game plays from that file,
-so saves land in it. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).
-Linux is where it has been developed and tested, on a Steam Deck.
-
-## The software
-
-Reading, writing and copying disks is done with the
-[Greaseweazle host tools](https://github.com/keirf/greaseweazle) themselves.
-What this repository adds is **the bridge**: it shows the two real drives as disk
-image files (`FD1.hdm`, `FD2.hdm`) that an emulator opens like any other image. Reads
-come from the drive on demand, writes go back to the disk a moment later, and a disk
-swap is noticed by the drive's own disk-change line.
-
-[`app/station.py`](app/station.py) is the window: the board and both drives, Start, the
-two files, a Play button when RetroArch with the PC-98 core is installed, and per drive a
-*Back up this disk* button that reads the disk once into `Documents/PC98 Floppies`, and
-*Use a backup instead*, which makes the drive play from an image in that folder. Saves go
-to whatever the drive plays from, the floppy or the file. Playing from the drives needs a
-FUSE driver: libfuse on Linux, WinFsp on Windows, FUSE-T or macFUSE on macOS; playing from
-backups on both drives needs none. [`app/floppy_bridge.py`](app/floppy_bridge.py) is the
-bridge the window runs. Setup and use: [app/BRIDGE.md](app/BRIDGE.md).
-
-The bridge is proven on Linux with RetroArch's Neko Project II kai core: a game
-boots from the real drives and reads correctly from both. Saving back to a disk,
-swaps during play, Windows and macOS have not been tested yet. It includes no
-emulator and no BIOS files; bring your own.
-
-## What protects your disks
-
-- **The notch.** A covered write-protect notch is enforced by the drive itself, in hardware.
-  The bridge also shows such a disk as a read-only file, so an emulator never tries.
-- **No write before track 0 decodes.** The first write to a disk is only accepted after the
-  drive has read the disk's track 0 with the sector headers the decoder expects. A drive
-  whose home position has slipped fails that test and is refused, instead of writing every
-  track to the wrong place.
-- **Every write is verified.** Each track written is read back; if it doesn't match, the disk
-  is marked broken and no more writes go to it.
-- **A swap drops pending writes.** Changes that haven't reached the disk yet are never written
-  to a disk that was swapped in underneath them, and the window says so.
-- **Only what the game writes.** The bridge writes tracks the emulator changed, nothing else.
-  Backup only reads.
-
-What software can't protect against is a dirty or damaged head, which scratches a disk in
-a few passes. That part is on you, below.
-
-## Before an original disk goes in
-
-Old drives arrive with decades of oxide on their heads, and a dirty head scratches
-disks. Clean both heads with 90 % or stronger isopropyl alcohol and let them dry,
-run a write-and-read test on a blank, and only then insert anything irreplaceable.
-Read an original once, keep the image, and play from a copy.
+Software details: [app/BRIDGE.md](app/BRIDGE.md).
 
 ## Licence
 
