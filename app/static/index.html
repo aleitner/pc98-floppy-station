@@ -141,12 +141,15 @@ a { color: var(--cyan); }
     else if (!d.disk) state = '<b class="off">unit ' + esc(d.drive) + ' \u00b7 no disk</b>';
     else state = '<b>unit ' + esc(d.drive) + ' \u00b7 disk in</b>' + (d.protected ? ' <b class="lock">\u00b7 write-protected</b>' : ' <b>\u00b7 writable</b>') + (d.label ? ' <b class="lbl">\u00b7 ' + esc(d.label) + '</b>' : '');
 
-    el.innerHTML = '<span class="name">' + name + '</span><span class="side">' + d.side.toUpperCase() + ' drive</span>' +
+    var html = '<span class="name">' + name + '</span><span class="side">' + d.side.toUpperCase() + ' drive</span>' +
       '<span class="state">' + state + '</span>' +
       '<span class="path"><code title="' + esc(d.file) + '">' + esc(d.file) + '</code><button type="button" class="small" data-copy="' + esc(d.file) + '">Copy</button></span>' +
       (d.image
         ? '<span class="path"><button type="button" class="small" data-usedrive="' + name + '"' + (S.running ? ' disabled' : '') + '>Use the drive</button><span class="job">playing from ' + esc(d.image_name) + '</span></span>'
         : '<span class="path"><button type="button" class="small" data-backup="' + name + '"' + (canBackup(d) ? '' : ' disabled') + '>Back up this disk</button>' + imageSelect(name) + '<span class="job">' + jobText(name) + '</span></span>');
+    // Redrawing while a list is open or a button has focus would snatch it away: wait.
+    if (el.contains(document.activeElement) && document.activeElement !== document.body) return;
+    if (el.innerHTML !== html) el.innerHTML = html;
   }
   function imageSelect(name) {
     if (!S.library.images.length) return '';
