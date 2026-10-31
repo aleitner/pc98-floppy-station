@@ -1079,6 +1079,50 @@ def app_mode_browser() -> Optional[List[str]]:
     return None
 
 
+def linux_desktop_entry() -> None:
+    """Make the window ours in the task bar on Linux. The window is a browser's, so the
+    desktop would file it under the browser's icon; a desktop entry with our icon and, on
+    KDE, a window rule matching the window's title give it its own entry. Idempotent."""
+    if SYSTEM != "Linux":
+        return
+    try:
+        home = os.path.expanduser("~")
+        apps = os.path.join(home, ".local/share/applications")
+        icons = os.path.join(home, ".local/share/icons/hicolor/256x256/apps")
+        os.makedirs(apps, exist_ok=True)
+        os.makedirs(icons, exist_ok=True)
+        shutil.copyfile(os.path.join(HERE, "icon.png"), os.path.join(icons, "pc98-floppy-station.png"))
+        exe = " ".join(f'"{a}"' for a in self_command([]))
+        with open(os.path.join(apps, "pc98-floppy-station.desktop"), "w", encoding="utf-8") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=PC-98 Floppy Station\n"
+                    "Comment=Play PC-98 games from the real floppy drives\n"
+                    f"Exec={exe}\nIcon=pc98-floppy-station\nTerminal=false\nCategories=Game;Emulator;\n"
+                    "StartupWMClass=pc98-floppy-station\n")
+        if "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", ""):
+            import configparser
+            path = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), "kwinrulesrc")
+            c = configparser.RawConfigParser()
+            c.optionxform = str  # type: ignore[assignment]
+            c.read(path)
+            key = "pc98-floppy-station"
+            if not c.has_section(key):
+                if not c.has_section("General"):
+                    c.add_section("General")
+                rules = [r for r in c.get("General", "rules", fallback="").split(",") if r] + [key]
+                c.set("General", "rules", ",".join(rules))
+                c.set("General", "count", str(len(rules)))
+                c.add_section(key)
+                for k, v in (("Description", "PC-98 Floppy Station window"), ("title", APP_NAME),
+                             ("titlematch", "1"), ("desktopfile", key), ("desktopfilerule", "2")):
+                    c.set(key, k, v)
+                with open(path, "w", encoding="utf-8") as f:
+                    c.write(f, space_around_delimiters=False)
+                subprocess.run(["qdbus", "org.kde.KWin", "/KWin", "reconfigure"], check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception as e:
+        log.info("desktop entry not installed: %s", e)
+
+
 def open_window(url: str) -> str:
     """Show the page. Best: the system's own web engine in a window of ours (pywebview).
     Next: a Chromium-family browser in app mode, which is a bare window. Last: a browser tab.
@@ -1091,6 +1135,7 @@ def open_window(url: str) -> str:
         pass
     cmd = app_mode_browser()
     if cmd:
+        linux_desktop_entry()
         try:
             subprocess.Popen(cmd + [f"--app={url}", "--window-size=1040,980"], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
