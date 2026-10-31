@@ -258,6 +258,40 @@ def probe_drives(cfg: Config) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def external_env() -> Dict[str, str]:
+    """The environment for programs that are not ours. The packaged build points
+    LD_LIBRARY_PATH at its own bundled libraries, which breaks system programs such as the
+    browser or flatpak when they inherit it; hand them the environment we were started with."""
+    env = dict(os.environ)
+    for key in [k for k in env if k.startswith("_PYI_") or k == "_MEIPASS2"]:
+        env.pop(key, None)
+    for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+        orig = env.pop(var + "_ORIG", None)
+        if orig is not None:
+            env[var] = orig
+        elif FROZEN:
+            env.pop(var, None)
+    return env
+
+
+def run_external(cmd: List[str], **kwargs: Any) -> "subprocess.Popen[bytes]":
+    return subprocess.Popen(cmd, env=external_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=(SYSTEM != "Windows"), **kwargs)
+
+
+def open_in_browser(url: str) -> None:
+    """The system's default browser, with a clean environment (webbrowser.open would pass ours)."""
+    try:
+        if SYSTEM == "Windows":
+            os.startfile(url)  # type: ignore[attr-defined]
+        elif SYSTEM == "Darwin":
+            run_external(["open", url])
+        else:
+            run_external(["xdg-open", url])
+    except OSError:
+        webbrowser.open(url)
+
+
 # -- the bridge as a child process ------------------------------------------------
 def self_command(args: List[str]) -> List[str]:
     """How to run this program again: the frozen executable, or the interpreter on this file."""
@@ -364,7 +398,8 @@ class Bridge:
                 # an unmount from outside makes the bridge write what is pending and exit;
                 # keep waiting while it reports progress, as above
                 tool = shutil.which("fusermount3") or shutil.which("fusermount")
-                subprocess.run([tool, "-u", mountpoint] if tool else ["umount", mountpoint], check=False)
+                subprocess.run([tool, "-u", mountpoint] if tool else ["umount", mountpoint], check=False,
+                               env=external_env())
                 while time.monotonic() < deadline:
                     seen = self.lines
                     try:
@@ -578,8 +613,8 @@ def launch_emulator(cfg: Config, where: str) -> str:
     if cmd is None:
         return "RetroArch with the Neko Project II kai core was not found; open the two files in your emulator"
     try:
-        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=(SYSTEM != "Windows"))
+        run_external(cmd) if isinstance(cmd, list) else subprocess.Popen(
+            cmd, env=external_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         return f"couldn't start the emulator: {e}"
     return "emulator started"
@@ -1119,7 +1154,7 @@ def linux_desktop_entry() -> None:
                     c.set(key, k, v)
                 with open(path, "w", encoding="utf-8") as f:
                     c.write(f, space_around_delimiters=False)
-                subprocess.run(["qdbus", "org.kde.KWin", "/KWin", "reconfigure"], check=False,
+                subprocess.run(["qdbus", "org.kde.KWin", "/KWin", "reconfigure"], check=False, env=external_env(),
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     except Exception as e:
         log.info("desktop entry not installed: %s", e)
@@ -1139,13 +1174,11 @@ def open_window(url: str) -> str:
     if cmd:
         linux_desktop_entry()
         try:
-            subprocess.Popen(cmd + [f"--app={url}", "--window-size=1040,980"], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=(SYSTEM != "Windows"))
+            run_external(cmd + [f"--app={url}", "--window-size=1040,980"])
             return "app"
         except OSError:
             pass
-    webbrowser.open(url)
+    open_in_browser(url)
     return "browser"
 
 
