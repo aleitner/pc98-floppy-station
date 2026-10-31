@@ -1147,15 +1147,15 @@ def serve(show: str) -> int:
 
     def watch_page() -> None:
         # The page asks for the state every second and says goodbye when it closes. Without a
-        # tray, the program ends when the page has gone and nothing is running. A browser
-        # slows a hidden tab's timers right down, so the fallback wait is generous.
+        # tray there is nothing left to show the program, so closing the window ends it: the
+        # drives are stopped, with anything pending written first. A reload also says goodbye
+        # but polls again within the 3 s, so it doesn't count. If the page just falls silent
+        # (a browser slows a hidden tab right down) the program ends only when nothing runs.
         while not tray:
             time.sleep(2)
-            if st.busy:
-                continue
             now = time.monotonic()
             said_bye = st.page_gone and now - st.page_gone > 3 and st.last_seen < st.page_gone
-            quiet = st.seen_once and now - st.last_seen > 150
+            quiet = st.seen_once and now - st.last_seen > 150 and not st.busy
             if said_bye or quiet:
                 httpd.shutdown()
                 return

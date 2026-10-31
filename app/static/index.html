@@ -188,7 +188,7 @@ a { color: var(--cyan); }
     $("probe").disabled = S.busy;
     $("swap").disabled = S.busy || !S.identified;
     $("identify").disabled = S.busy;
-    $("footnote").textContent = S.tray ? "Closing this window hides it; Quit in the tray icon ends the program." : "Closing this window ends the program once the bridge is stopped.";
+    $("footnote").textContent = S.tray ? "Closing this window hides it; Quit in the tray icon ends the program." : "Closing this window stops the drives and ends the program.";
     $("emuline").innerHTML = S.emulator.custom ? "your own command" :
       S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" : '<b class="bad">RetroArch with the PC-98 core not found</b>; open the two files in your emulator';
     $("play").disabled = !(S.running && S.ready && (S.emulator.found || S.emulator.custom));
