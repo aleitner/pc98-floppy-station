@@ -43,7 +43,9 @@ jobs:
         include:
           - os: ubuntu-22.04
             name: linux
-            artifact: dist/pc98-floppy-station
+            artifact: |
+              dist/pc98-floppy-station
+              dist/pc98-floppy-station-x86_64.AppImage
           - os: windows-latest
             name: windows
             artifact: dist/pc98-floppy-station.exe
@@ -71,13 +73,33 @@ jobs:
           python -m pip install pyinstaller mfusepy pywebview pystray "git+https://github.com/keirf/greaseweazle@latest"
       - name: Build
         run: pyinstaller station.spec
+      - name: Linux AppImage
+        if: matrix.name == 'linux'
+        # One file with the icon and menu entry inside, which is how Linux desktops show a program.
+        run: |
+          sudo apt-get install -y libfuse2
+          curl -sSL -o appimagetool "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+          mkdir -p AppDir/usr/bin
+          cp dist/pc98-floppy-station AppDir/usr/bin/
+          cp icon.png AppDir/pc98-floppy-station.png
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=PC-98 Floppy Station' 'Comment=Play PC-98 games from the real floppy drives' 'Exec=pc98-floppy-station' 'Icon=pc98-floppy-station' 'Terminal=false' 'Categories=Game;Emulator;' 'StartupWMClass=pc98-floppy-station' > AppDir/pc98-floppy-station.desktop
+          printf '%s\n' '#!/bin/sh' 'HERE="$(dirname "$(readlink -f "$0")")"' 'exec "$HERE/usr/bin/pc98-floppy-station" "$@"' > AppDir/AppRun
+          chmod +x AppDir/AppRun
+          ARCH=x86_64 ./appimagetool AppDir dist/pc98-floppy-station-x86_64.AppImage
+          ls -la dist
       - name: Zip the Mac app
         if: startsWith(matrix.name, 'macos')
         run: cd dist && ditto -c -k --keepParent "PC-98 Floppy Station.app" pc98-floppy-station-${{ matrix.name }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: pc98-floppy-station-${{ matrix.name }}
-          path: app/${{ matrix.artifact }}
+          path: |
+            app/dist/pc98-floppy-station
+            app/dist/pc98-floppy-station-x86_64.AppImage
+            app/dist/pc98-floppy-station.exe
+            app/dist/pc98-floppy-station-macos.zip
+            app/dist/pc98-floppy-station-macos-intel.zip
           if-no-files-found: error
 
   release:
@@ -96,6 +118,7 @@ jobs:
       - name: Name the files
         run: |
           mkdir release
+          cp out/pc98-floppy-station-linux/pc98-floppy-station-x86_64.AppImage release/pc98-floppy-station-linux.AppImage
           cp out/pc98-floppy-station-linux/pc98-floppy-station release/pc98-floppy-station-linux
           ls -la release
       - uses: softprops/action-gh-release@v2

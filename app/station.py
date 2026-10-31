@@ -1092,7 +1092,9 @@ def linux_desktop_entry() -> None:
         os.makedirs(apps, exist_ok=True)
         os.makedirs(icons, exist_ok=True)
         shutil.copyfile(os.path.join(HERE, "icon.png"), os.path.join(icons, "pc98-floppy-station.png"))
-        exe = " ".join(f'"{a}"' for a in self_command([]))
+        # inside an AppImage the running file is a temporary mount; the entry must name the AppImage
+        appimage = os.environ.get("APPIMAGE")
+        exe = f'"{appimage}"' if appimage else " ".join(f'"{a}"' for a in self_command([]))
         with open(os.path.join(apps, "pc98-floppy-station.desktop"), "w", encoding="utf-8") as f:
             f.write("[Desktop Entry]\nType=Application\nName=PC-98 Floppy Station\n"
                     "Comment=Play PC-98 games from the real floppy drives\n"
