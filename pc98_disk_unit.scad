@@ -127,8 +127,8 @@ WALL        =   3.0;
 //   * through the ring the portrait floor is relieved 0.6, so what the drive
 //     passed was 146.52 high. On its pads it gets 147.0: the ring only proves
 //     the frame is under 146.52, and that gap is above the drive, out of sight.
-// The 41.3-axis corridor is 0.3 TIGHTER than that ring, at the owner's
-// request: the ring looked loose round the frame. 41.9 has NOT been printed.
+// The 41.3-axis corridor is 0.3 TIGHTER than that ring, on purpose: the
+// ring looked loose round the frame. 41.9 has NOT been printed.
 // It is 0.3 over the thickest point gauged on the casting (41.6), and a ring
 // can tip round a high spot where a 203 mm tube in two halves cannot. If a
 // drive binds, the proven numbers are 0.9 (42.2) with the portrait DIV at 6.0.
@@ -153,7 +153,7 @@ PAD_RELIEF  =   0.6;
 // raised boss round each screw hole; on a pad the boss lifted the drive while
 // the bezel recess held its front, so the drive sat at an angle. With the
 // floor flat at the relieved level the bosses are the seat instead. Their
-// height was not measured: 0.6 of drop is the owner's call.
+// height was not measured: 0.6 of drop is a judgement call.
 PADS        = false;
 // Drive screws: #6-32 pan head (6.65 x 2.11) on a #6 SAE flat washer, in a
 // counterbore. The washer spreads the clamp: a bare head over a 4.6 hole bears
@@ -236,7 +236,7 @@ LIP_L       =   8.0;   // ... and how far it reaches into the other half
 // used to start at exactly FLOOR_Z, so the tongue was a press fit on its
 // underside while every other face had clearance.
 // v9, 11 Oct 2026: 0.15 -> 0.05. In the printed box the halves slid apart too
-// easily; the owner asked for a tighter fit rather than a tongue on the floor.
+// easily; a tighter fit was chosen rather than a tongue on the floor.
 // 0.05 a side is a push fit: if it will not go together, scrape the tongue.
 LIP_CL_OUT  =   0.05;  // outer/skin-side faces -- these locate
 LIP_CL_IN   =   0.35;  // inboard faces take the slack
@@ -688,13 +688,13 @@ module corridor_mouth(s, dir) {
 // SEAM SCREW (v8, portrait). The printed box could be pulled apart at the top:
 // the drive screws tie the halves together through the floor only, and the
 // lap tongue just slides. Two snap latches were drawn (v6 a strap, v7 a bar)
-// and the owner wanted neither: join the pieces, then let a SCREW hold them.
+// and neither felt right: join the pieces, then let a SCREW hold them.
 // So the roof tongue is thickened into a short boss where the divider is, a
 // M2.5 nut slides into a slot in it from the side, and one M2.5 x 10 screw
 // (the board's hardware) goes down through the rear half's roof, through the
 // tongue, into that nut. The boss reaches 9 mm past the seam, inside the
 // rear half's divider, and takes nothing from the drives.
-// OFF since v9: the owner did not want a screw on top either. The joint is
+// OFF since v9: no screw on top either. The joint is
 // the tighter lap (LIP_CL_OUT) plus the drive screws through the floor.
 SEAM_SCREW = false;
 SS_XC   = SX0 + SLOT_W + DIV/2;     // divider centreline

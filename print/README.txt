@@ -74,7 +74,7 @@ go straight to 1_shell_FRONT instead, that piece is the test.
   A_PORTRAIT_drives_side_by_side    102.4 x 157.0 x 285 mm   ~1.1 kg
         Drives stand on edge, side by side. Taller and narrower.
 
-  B_STACKED_drives_one_above_other  159.0 x 102.5 x 285 mm   ~1.1 kg
+  B_STACKED_drives_one_above_other  159.0 x  99.8 x 285 mm   ~1.1 kg
         Drives lie flat, one above the other. Wider and lower.
 
 Five files in each folder. All in millimetres and ALREADY ROTATED for
@@ -85,7 +85,7 @@ different from the table below, something has been scaled.
   0b_FIT_TEST_rear_ring     print FIRST (~1.5 h). The last 27 mm of the back.
   1_shell_FRONT             the front half of the box
   2_shell_REAR              the back half of the box
-  3_back_panel              the clip-on back door (the board mounts on it)
+  3_back_panel              the clip-on back door
 
   PORTRAIT                            X       Y       Z
     ..._0a_FIT_TEST_front_ring      102.4   157.0    12.0
@@ -116,8 +116,9 @@ PRINT ORDER -- test first, it saves a day of printing
    you, drop its two bottom tabs into the slots in the ring's sill, then swing
    the top in until both clips click. It should sit evenly, about 1.5 mm
    inside the frame. Pulling the top edge should tilt it back out.
-3. If both are good, print 1_shell_FRONT and 2_shell_REAR. If not, stop and
-   send a photo -- the fit numbers are one line each in the model.
+3. If both are good, print 1_shell_FRONT and 2_shell_REAR. If not, stop:
+   the fit numbers are one line each near the top of the model source, and
+   an issue on the project page with a photo gets them adjusted.
 
 
 MATERIAL AND SLICER SETTINGS
@@ -131,8 +132,6 @@ PETG, not PLA. 0.4 mm nozzle, 0.2 mm layers.
   may flag a few small flat spots; leave them:
      front shell: the step 5 mm inside each drive opening (the bezel stops
                   on it)
-     back panel:  the roofs of the four nut pockets (they have built-in
-                  bridge layers)
 - Seam position: REAR for the shells (it lands on the underside of the box).
   For the back panel use Aligned, or paint the seam onto the plain face of
   the two clip arms, not their tooth face.
@@ -148,9 +147,8 @@ ORIENTATION -- please keep it
 ----------------------------
 The two shell halves are tubes open at one end and MUST print standing on
 end, as saved. On a side, the far wall becomes an unsupported roof.
-The back panel prints flat on its outer face, as saved; its clips and
-standoffs point up, and the two tabs on its bottom edge lie flat as part of
-the plate.
+The back panel prints flat on its outer face, as saved; its clips point up,
+and the two tabs on its bottom edge lie flat as part of the plate.
 
 The first layer of 1_shell_FRONT is the visible FRONT of the box and the
 first layer of 3_back_panel is the visible BACK. Clean sheet, slow first
@@ -182,22 +180,22 @@ The board (both layouts: it goes in the rear piece, on its floor):
    bottom of the back panel once the panel is on.
 
 The drives:
-5. Fit the two shell halves together: the front half's tongue pushes into the
+4. Fit the two shell halves together: the front half's tongue pushes into the
    back half, and the hidden tabs click as it seats. Stand the box on its feet.
-6. Slide each drive in from the FRONT, back end first, until the beige bezel
+5. Slide each drive in from the FRONT, back end first, until the beige bezel
    drops into its recess, flush with the face.
-7. Screws: a washer under every head. Side by side: two per drive, up through
+6. Screws: a washer under every head. Side by side: two per drive, up through
    the floor. Stacked: four per drive, two through each side wall -- start
    all four before tightening any, then tighten alternately so the drive
    stays centred.
-8. Before tightening the REAR screw(s) on each drive, press the two shell
+7. Before tightening the REAR screw(s) on each drive, press the two shell
    halves firmly together. Tighten to "snug with a short screwdriver" --
    no wrist. That's about 0.35 N.m; more crushes the plastic.
-9. Re-snug the drive screws after a day or two, and again after the first
+8. Re-snug the drive screws after a day or two, and again after the first
    time the box is moved. Plastic settles a little under the washers.
 
 Close it:
-10. Connect the ribbon and power to the drives. Hold the panel with its top
+9. Connect the ribbon and power to the drives. Hold the panel with its top
     tilted away from the box, drop its two bottom tabs into the slots in the
     sill along the bottom of the back, then swing the top in and press until
     both clips click. To open it, pull the top edge out at the finger notch,

@@ -2,9 +2,11 @@ MIT License
 
 Copyright (c) 2026 Alexander Leitner
 
-This licence covers the software in this repository: the contents of the
-app/ directory. The enclosure model, the STL files, the pictures and the
-written guides are under a different licence; see LICENSE-MODEL.md.
+This licence covers the software in this repository: the Python source,
+the page, the build spec and the icons in app/. Not covered: app/BRIDGE.md
+(see LICENSE-MODEL.md) and the fonts in app/static/fonts, which are under the
+SIL Open Font License 1.1 (see the note there). The enclosure model, the STL
+files, the pictures and the written guides are under LICENSE-MODEL.md.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

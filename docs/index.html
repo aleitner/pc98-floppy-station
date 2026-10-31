@@ -213,8 +213,8 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
     <tr><td>Y power cable</td><td class="num">1</td><td><a href="https://shop.deviceside.com/prod/YCABLE">deviceside YCABLE</a></td><td>Splits the supply to both drives.</td></tr>
     <tr><td>34-pin ribbon, twisted, 36"</td><td class="num">1</td><td><a href="https://www.cablesonline.com/36unflopdriv.html">cablesonline</a></td><td>Card-edge connectors for 5.25" drives. The twist makes the two drives A and B.</td></tr>
     <tr><td>USB-C cable</td><td class="num">1</td><td><a href="https://www.amazon.com/dp/B06XMY49BM">Amazon</a></td><td>Board to computer, through the notch in the rear door.</td></tr>
-    <tr><td>6-32 × 3/8" pan-head screws</td><td class="num">8</td><td><a href="https://www.amazon.com/dp/B0G6ZSQGT9">Amazon</a></td><td>Drives to the shell floor, through the washers.</td></tr>
-    <tr><td>#6 flat washers</td><td class="num">8</td><td><a href="https://www.amazon.com/dp/B0CM3MCSGS">Amazon</a></td><td>Under the drive screw heads.</td></tr>
+    <tr><td>6-32 × 3/8" pan-head screws</td><td class="num">4 or 8</td><td><a href="https://www.amazon.com/dp/B0G6ZSQGT9">Amazon</a></td><td>Hold the drives: two per drive through the floor side by side, four per drive through the side walls stacked.</td></tr>
+    <tr><td>#6 flat washers</td><td class="num">4 or 8</td><td><a href="https://www.amazon.com/dp/B0CM3MCSGS">Amazon</a></td><td>Under the drive screw heads.</td></tr>
     <tr><td>M2.5 × 10 screws</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0G58L9P4G">Amazon</a></td><td>Greaseweazle to its posts.</td></tr>
     <tr><td>M2.5 hex nuts</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B0FMRGFZP4">Amazon</a></td><td>Pressed into the pockets under the floor.</td></tr>
     <tr><td>Rubber bumper feet</td><td class="num">4</td><td><a href="https://www.amazon.com/dp/B074PXFWPK">Amazon</a></td><td>Into the recesses underneath.</td></tr>
@@ -228,7 +228,7 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
   <p>Pick <strong>one</strong> folder from the print files. They are two versions of the same box, not ten parts. Five files in each, all in millimetres and already rotated for printing.</p>
   <div class="two">
     <figure><img src="img/1_portrait_front.png" alt="Side-by-side layout render." loading="lazy" width="2400" height="1800"><figcaption>A, side by side: 102.4 × 157.0 × 285 mm. Taller and narrower.</figcaption></figure>
-    <figure><img src="img/4_landscape_front.png" alt="Stacked layout render." loading="lazy" width="2400" height="1800"><figcaption>B, stacked: 159.0 × 99.8 × 285 mm. Wider and lower.</figcaption></figure>
+    <figure><img src="img/5_landscape_exploded.png" alt="Stacked layout, exploded: drives, front shell, rear shell, door." loading="lazy" width="2400" height="1800"><figcaption>B, stacked: 159.0 × 99.8 × 285 mm. Wider and lower.</figcaption></figure>
   </div>
   <div class="box warn"><strong>Print everything at 100 %.</strong> The drive openings were already tightened after a test print. Scaling in the slicer would shrink them, and the screw pattern the board bolts to. If the slicer shows a size other than the table below, something has been scaled.</div>
 
@@ -243,7 +243,7 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
   <ul>
     <li><strong>PETG</strong>, not PLA. 0.4 mm nozzle, 0.2 mm layers.</li>
     <li><strong>Perimeters:</strong> 6 for both shell halves and both test rings, because the screw seats want solid plastic under them. 3 for the back panel. Infill about 20 %.</li>
-    <li><strong>Supports: off.</strong> Every part prints without them. The slicer may flag a few small flat spots: the step inside each drive opening and the roofs of the nut pockets. Leave them, they have built-in bridge layers.</li>
+    <li><strong>Supports: off.</strong> Every part prints without them. The slicer may flag one small flat spot, the step inside each drive opening that the bezel stops on. Leave it.</li>
     <li><strong>Seam:</strong> Rear for the shells, it lands on the underside. Aligned for the back panel.</li>
     <li><strong>Elephant-foot compensation:</strong> keep the profile's default, about 0.2 mm. The front's first layer is the mouth of the drive openings.</li>
     <li><strong>Brim:</strong> none. Smooth PEI needs glue stick with PETG; satin or textured sheets don't, and the sheet's texture becomes the finish of the front.</li>
@@ -263,21 +263,22 @@ footer .cur::after { content: "\2588"; color: var(--ink); margin-left: 4px; anim
 
 <section id="build">
   <h2>Building <small>くみたて</small></h2>
-  <figure><img src="img/3_portrait_exploded.png" alt="Exploded render: drives in front, the front shell, the rear shell, then the door with the board, feet below." loading="lazy" width="2400" height="1800"><figcaption>Front to back: the two drives, the front shell, the rear shell, the door. The board lies on the rear shell's floor.</figcaption></figure>
+  <figure><img src="img/3_portrait_exploded.png" alt="Exploded render: drives in front, the front shell, the rear shell with the board on its floor, then the door, feet below." loading="lazy" width="2400" height="1800"><figcaption>Front to back: the two drives, the front shell, the rear shell, the door. The board lies on the rear shell's floor.</figcaption></figure>
   <p>Before any of this, test both drives on a blank disk and clean their heads; see <em>Caring for disks</em>. It's much easier with the drives on the bench than in the box.</p>
   <ol class="steps">
-    <li><strong>Check the drive jumpers.</strong> Both drives stay on <code>D1</code>, the factory setting; the twisted ribbon tells them apart. Leave the other straps as they came.</li>
-    <li><strong>Press the four M2.5 nuts</strong> into the hex pockets on the underside of the rear shell. A flat screwdriver handle does it; they only need to sit flush.</li>
-    <li><strong>Screw the Greaseweazle</strong> to the four posts on the rear shell's floor with the M2.5 × 10 screws, components up, USB-C socket toward the back.</li>
-    <li><strong>Slide the drives into the front shell</strong> from the back, bezels first, until each bezel drops into its recess and sits flush with the face.</li>
-    <li><strong>Plug in the ribbon</strong>: the end connector past the twist goes on one drive, the middle one on the other, the header on the board. Note which drive got the end connector; it becomes drive A. Plug the Y cable into both drives' power sockets.</li>
-    <li><strong>Push the two shells together.</strong> The front's strip slides inside the rear until the hidden tabs click, across the roof and down each side. A firm pull separates them again.</li>
-    <li><strong>Screw the drives down</strong> through the floor: a washer under each 6-32 screw head, four screws per drive, into the drives' own threaded holes. These screws are what ties the two halves together, so tighten them evenly.</li>
-    <li><strong>Plug in the USB-C cable</strong> and lead it through the notch in the door's bottom edge; plug in the power lead through its hole.</li>
-    <li><strong>Snap the door on</strong>: bottom tabs into the sill, swing the top in until it clicks, then the side tabs click as it seats.</li>
+    <li><strong>Press the four M2.5 nuts</strong> into the hex pockets on the underside of the rear shell, near the back. They're meant to be tight: a flat screwdriver handle or a few light taps puts them home.</li>
+    <li><strong>Lay the Greaseweazle on the four posts</strong> in the rear shell's floor, components up, USB-C socket toward the back, ribbon header toward the drives. It only fits one way. Drive the four M2.5 × 10 screws down through the board into the nuts: snug, not tight.</li>
+    <li><strong>Plug the USB-C cable into the board.</strong> Its plug will sit in the notch at the bottom of the door.</li>
+    <li><strong>Fit the two shells together.</strong> The front half's tongue pushes into the rear half until the hidden tabs click. Stand the box on its feet.</li>
+    <li><strong>Slide each drive in from the front</strong>, back end first, until its beige bezel drops into the recess, flush with the face. The bezel is wider than the slot, so drives only ever go in and out at the front.</li>
+    <li><strong>Screw the drives down</strong>, a washer under every head. Side by side: two 6-32 screws per drive, up through the floor. Stacked: four per drive, two through each side wall; start all four before tightening any, then tighten alternately so the drive stays centred.</li>
+    <li><strong>Press the shells firmly together</strong> before tightening each drive's rear screw. Snug with a short screwdriver, no wrist: more crushes the plastic. Re-snug after a day or two.</li>
+    <li><strong>Connect the ribbon and power</strong> to the drives: the connector past the twist on one drive, the middle one on the other, the header on the board. The drives' jumpers stay at their factory setting; the twist is what tells them apart.</li>
+    <li><strong>Snap the door on</strong>: hold its top tilted away, drop the two bottom tabs into the slots in the sill, swing the top in and press until the clips click; the side tabs click as it seats.</li>
     <li><strong>Stick the feet</strong> into the recesses underneath.</li>
   </ol>
-  <p>Opening it later: pull the top edge of the door, unplug the cables, undo the eight drive screws, and pull the halves apart.</p>
+  <figure><img src="img/2_portrait_rear.png" alt="Rear view render: the door with the USB-C notch at its bottom edge and the power lead's hole." loading="lazy" width="2400" height="1800"><figcaption>The back: USB-C through the notch in the door's bottom edge, power through the hole above it.</figcaption></figure>
+  <p>Opening it later: pull the door's top edge out at the finger notch, unplug the cables, undo the drive screws, and push each drive out of the front from behind. If a bezel sits a little proud, shave the step it stops on, 5 mm inside the opening.</p>
 </section>
 
 <section id="software">

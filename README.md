@@ -39,7 +39,7 @@ One file per system, nothing else to install except the disk driver. Latest vers
 | Linux | [pc98-floppy-station-linux](https://github.com/aleitner/pc98-floppy-station/releases/latest/download/pc98-floppy-station-linux) | `fuse3` from your distribution | `chmod +x pc98-floppy-station-linux`, then run it. |
 
 Plug the unit in, start the program, and a window opens. The first time, put a disk in
-the **left** drive only and press *Check*, so it learns which drive is which. Then pick a
+the **left** drive only and press *Check*, so it learns which drive is which. Then
 *Start*, then *Play*. Each drive has a *Back up this disk* button, and a backup can stand
 in for a drive: choose it under *Use a backup instead*, and the game plays from that file.
 With backups chosen for both drives, no driver is needed at all. All releases: [releases](https://github.com/aleitner/pc98-floppy-station/releases).

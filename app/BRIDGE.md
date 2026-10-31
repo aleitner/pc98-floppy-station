@@ -12,7 +12,7 @@ Status: tested on Linux (SteamOS). **Not yet run on Windows or macOS.**
 
 ## Install
 
-A filesystem layer and Python with two packages.
+A filesystem layer and Python with a few packages.
 
 | | Filesystem layer | Compiler for the Python step |
 |---|---|---|
@@ -20,9 +20,10 @@ A filesystem layer and Python with two packages.
 | Windows | install [WinFsp](https://winfsp.dev/rel/) | Microsoft C++ Build Tools |
 | macOS | install [FUSE-T](https://www.fuse-t.org/), or macFUSE (Apple Silicon needs a reduced-security boot for macFUSE) | `xcode-select --install` |
 
-    python3 -m pip install mfusepy git+https://github.com/keirf/greaseweazle@latest
+    python3 -m pip install mfusepy pywebview pystray git+https://github.com/keirf/greaseweazle@latest
 
-The Greaseweazle package contains C code, so that step needs a compiler unless a build for
+`pywebview` gives the program its own window and `pystray` a tray icon; both are optional,
+without them the page opens in a browser. The Greaseweazle package contains C code, so that step needs a compiler unless a build for
 your Python version is already available. SteamOS has no compiler: build wheels in a
 `python:3.14` podman container into `~/gw-wheel/py314` and install from there. Redo this
 whenever a system update changes the Python version.
@@ -31,8 +32,9 @@ whenever a system update changes the Python version.
 
     python3 station.py
 
-A page opens in your browser at `http://127.0.0.1:9801` (another port if that one is busy;
-the program prints the address). It shows whether the Greaseweazle and the filesystem layer
+A window opens: the program's own where the system allows it, otherwise a bare browser window,
+otherwise a browser tab at `http://127.0.0.1:9801` (another port if that one is busy; the
+program prints the address). It shows whether the Greaseweazle and the filesystem layer
 were found, both drives with their disk state, and a Start button.
 
 **First run:** put a disk in the LEFT drive only, close its lever and press Check. The unit
@@ -47,8 +49,9 @@ as write-protected and the file is read-only, so the game can never write to it.
 into `Documents/PC98 Floppies` under the disk's own name (unreadable tracks are counted,
 not retried over and over). *Use a backup instead* lists that folder: pick an image and the
 drive plays from the file rather than the floppy; saves then land in the file. *Use the
-drive* switches back. When both drives play from images, the files are placed directly
-(links, or copies written back on Stop) and no driver is involved.
+drive* switches back. When both drives play from images, the files are placed directly in
+`~/PC98Drives` on every system (links, or copies written back on Stop) and no driver is
+involved.
 
 **Play:** if RetroArch with the Neko Project II kai core is installed, the Play button starts
 it with both drives loaded. For any other emulator, open the two files in its first and
@@ -60,8 +63,9 @@ game. Wait a couple of seconds after a save before opening a lever: changes reac
 about a second after the game stops writing. If a disk comes out first, those changes are
 dropped, never written to the next disk, and the log says so.
 
-Stop the bridge before closing the window. Anything unsaved is written first. Once the bridge
-is stopped and the window closed, the program ends by itself.
+Stop writes anything unsaved first. Closing the program's own window stops the bridge the same
+way; with a tray icon, closing the window only hides it and *Quit* ends the program. A browser
+tab that was closed ends the program a few seconds after the bridge is stopped.
 
 Settings are kept in `~/.config/pc98-floppy-station/settings.json` (Linux),
 `%APPDATA%\PC-98 Floppy Station` (Windows) or `~/Library/Application Support/PC-98 Floppy Station` (macOS).
@@ -89,4 +93,6 @@ data lands on the wrong tracks.
 
 ## Test
 
-`test_bridge.py` runs the bridge end to end on image files, with no drives (Linux).
+`test_drive.py` checks the disk layer with a fake drive, `test_bridge.py` runs the bridge end to
+end on image files through the driver, and `test_station.py` drives the window's server through
+its API with backups standing in for both drives. None touches hardware. All three run in CI.
