@@ -28,6 +28,8 @@ def plain_words(e: BaseException) -> str:
     text = str(e)
     if "firmware" in text:
         return text
+    if "Track0 signal" in text:
+        return "a drive's head lost its place; press Stop, then Start, which sends it home"
     if "Track 0 not found" in text:
         return "a drive didn't respond; check its power cable and the ribbon"
     code = getattr(e, "errno", None)

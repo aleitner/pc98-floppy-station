@@ -61,6 +61,11 @@ def early_disk() -> None:
 
 def main() -> int:
     early_disk()
+    import floppy_bridge
+    from floppy_drive import DiskError
+    check("Stop, then Start" in floppy_bridge.said(RuntimeError("Track0 signal absent after seek to cylinder 0\n 1. Try")),
+          "a head that lost its place says what to do")
+    check(floppy_bridge.said(DiskError(5, "can't read track 3.0")) == "can't read track 3.0", "a disk error says itself")
     d = tempfile.mkdtemp(prefix="bridgetest")
     m = os.path.join(d, "m")
     a, b = os.path.join(d, "a.hdm"), os.path.join(d, "b.hdm")

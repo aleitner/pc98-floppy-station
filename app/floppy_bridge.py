@@ -63,6 +63,10 @@ class Slot:
     reported: str = ""                        # the slot line a controlling program last saw
 
 
+def said(e: Exception) -> str:
+    return str(e.strerror) if isinstance(e, DiskError) else plain_words(e)
+
+
 class BridgeFS(mfusepy.Operations):
     use_ns = True
 
@@ -86,7 +90,7 @@ class BridgeFS(mfusepy.Operations):
             except mfusepy.FuseOSError:
                 raise
             except Exception as e:
-                status(f"error {slot.name}: {e}")
+                status(f"error {slot.name}: {said(e)}")
                 raise mfusepy.FuseOSError(errno.EIO)
 
     def _slot(self, path: str) -> Slot:
@@ -132,7 +136,7 @@ class BridgeFS(mfusepy.Operations):
                             self._refresh(slot)
                         slot.backend.idle()
                     except Exception as e:
-                        status(f"error {slot.name}: {e}")
+                        status(f"error {slot.name}: {said(e)}")
 
     def flush_now(self, slot: Slot) -> bool:
         with self._oplock:
