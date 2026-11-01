@@ -1068,7 +1068,7 @@ def serve(show_window: bool) -> int:
             time.sleep(0.5)
             now = time.monotonic()
             grace = 3.0 if st.running else 1.2
-            said_bye = st.page_gone and now - st.page_gone > grace and st.last_seen < st.page_gone
+            said_bye = st.page_gone and now - st.page_gone > grace and st.last_seen <= st.page_gone
             quiet = st.seen_once and now - st.last_seen > 150 and not st.busy
             if (said_bye or quiet) and not st.backing_up:
                 httpd.shutdown()
