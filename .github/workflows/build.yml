@@ -35,9 +35,33 @@ jobs:
       - name: Window test on image files
         run: python test_station.py
 
+  check-windows:
+    name: Test on Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: WinFsp
+        run: choco install winfsp -y --no-progress
+      - name: Python packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install mfusepy "git+https://github.com/keirf/greaseweazle@latest"
+      - name: Disk layer tests
+        run: python test_drive.py
+      - name: Bridge test through WinFsp
+        run: python test_bridge.py
+      - name: Window test through WinFsp
+        run: python test_station.py
+
   build:
     name: Build ${{ matrix.name }}
-    needs: check
+    needs: [check, check-windows]
     strategy:
       fail-fast: false
       matrix:
