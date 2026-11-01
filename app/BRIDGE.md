@@ -91,6 +91,16 @@ A drive whose track 0 has drifted (below) gets its steps there too: `"offsets": 
 - Every written track is read back. If it doesn't match, the disk is marked broken and no more
   writes go to it.
 - Changes that haven't reached the disk yet are never written to a disk swapped in underneath them.
+  A file opened before a swap can't write afterwards, and a write that would change the disk's
+  own name in its boot sector is refused, along with everything after it, until the next swap.
+- A drive stays read-only until it has been seen empty once, which proves it can report a swap.
+  With the bridge on its own, name proven drives with `--proven AB`.
+- A write rebuilds a whole track, so a track holding more than plain sectors, usually copy
+  protection, can't be written. Backups count such tracks in the file name; an image can't hold them.
+- A track that wouldn't read isn't tried again for 30 seconds and can't be written until the disk
+  is changed. A backup stops after 8 unreadable tracks in a row.
+- Saves are written last track first, so an interrupted save can't leave a directory naming
+  data that isn't there yet.
 - Backup only reads. The bridge writes only tracks the emulator changed.
 
 Software can't protect against a dirty or damaged head, which scratches a disk in a few passes.

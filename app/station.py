@@ -45,6 +45,7 @@ HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.realpath(os.path.join(HERE, "static"))
 SLOTS = ("FD1", "FD2")
 MAX_BODY = 64 * 1024
+BACKUP_GIVE_UP = 8                     # unreadable tracks in a row before a backup stops
 
 log = logging.getLogger("station")
 
@@ -73,6 +74,7 @@ class Config:
     offsets: Dict[str, int] = field(default_factory=dict)      # drive letter -> steps, for a drive whose track 0 slipped
     emulator_command: str = ""     # own launch command with {play} {fd1} {fd2}; "" = find RetroArch
     images: Dict[str, str] = field(default_factory=dict)       # FD1/FD2 -> image file standing in for the drive
+    proven: str = ""               # drives seen empty once, so known to report a swap; others stay read-only
 
     @property
     def right(self) -> str:
@@ -97,6 +99,8 @@ class Config:
             return cfg
         if data.get("left") in ("A", "B"):
             cfg.left = str(data["left"])
+        if isinstance(data.get("proven"), str):
+            cfg.proven = "".join(c for c in "AB" if c in data["proven"])
         if data.get("format") in EXT:
             cfg.format = str(data["format"])
         for key in ("mountpoint", "library", "emulator_command"):
@@ -261,8 +265,9 @@ def probe_drives(cfg: Config) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     with GwBoard() as board:
         for letter in ("A", "B"):
-            with GwBackend(letter, cfg.format, board, cfg.offsets.get(letter, 0)) as be:
-                out[letter] = {"disk": be.has_disk(), "protected": be.write_protected()}
+            with GwBackend(letter, cfg.format, board, cfg.offsets.get(letter, 0), letter in cfg.proven) as be:
+                disk = be.has_disk()
+                out[letter] = {"disk": disk, "protected": be.write_protected(), "proven": be.proven}
     return out
 
 
@@ -275,6 +280,8 @@ class Bridge:
         self.ready = False
         self.slots: Dict[str, Dict[str, Any]] = {}
         self.error = ""
+        self.unsaved = False
+        self.reader: Optional[threading.Thread] = None
         self.lock = threading.Lock()
 
     @property
@@ -286,7 +293,7 @@ class Bridge:
             if self.running:
                 return "already running"
             args = ["--bridge", "--control-stdin", "--format", cfg.format, "--mountpoint", cfg.mountpoint,
-                    "--fd1", cfg.left or "none", "--fd2", cfg.right or "none"]
+                    "--fd1", cfg.left or "none", "--fd2", cfg.right or "none", "--proven", cfg.proven]
             for letter, n in cfg.offsets.items():
                 if n:
                     args += ["--offset", f"{letter}={n}"]
@@ -295,10 +302,12 @@ class Bridge:
             self.slots = {}
             self.error = ""
             self.ready = False
+            self.unsaved = False
             self.proc = subprocess.Popen(self_command(args), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.STDOUT, text=True, bufsize=1,
                                          encoding="utf-8", errors="replace")
-            threading.Thread(target=self._reader, args=(self.proc,), daemon=True).start()
+            self.reader = threading.Thread(target=self._reader, args=(self.proc,), daemon=True)
+            self.reader.start()
             return "starting"
 
     def _reader(self, proc: subprocess.Popen[str]) -> None:
@@ -325,12 +334,15 @@ class Bridge:
     def _parse(self, line: str) -> None:
         if line == "ready":
             self.ready = True
+        elif line == "stopped WITH UNSAVED CHANGES":
+            self.unsaved = True
         elif line.startswith("error "):
             self.error = line[6:]
         elif line.startswith("slot "):                 # "slot FD1 disk=1 protected=0"
             parts = line.split()
             fields = dict(p.split("=", 1) for p in parts[2:])
-            self.slots[parts[1]] = {"disk": fields.get("disk") == "1", "protected": fields.get("protected") == "1"}
+            self.slots[parts[1]] = {"disk": fields.get("disk") == "1", "protected": fields.get("protected") == "1",
+                                    "proven": fields.get("proven") == "1"}
 
     def stop(self, mountpoint: str) -> str:
         """Ask the bridge to stop and wait while it is still saving; it prints progress for
@@ -347,16 +359,21 @@ class Bridge:
             except OSError:
                 pass
             if self._wait_while_busy(proc):
-                return "stopped"
+                return self._outcome()
             unmount(mountpoint)                 # the system's unmount also makes it write and exit
             if self._wait_while_busy(proc):
-                return "stopped"
+                return self._outcome()
             proc.kill()
             try:
                 proc.wait(10)
             except subprocess.TimeoutExpired:
                 return "the bridge did not stop; anything unsaved may be lost"
             return "stopped by force; anything unsaved may be lost"
+
+    def _outcome(self) -> str:
+        if self.reader is not None:
+            self.reader.join(2)                 # the last lines may still be on their way
+        return "stopped, but some changes could NOT be saved; the log says which" if self.unsaved else "stopped"
 
     def _wait_while_busy(self, proc: "subprocess.Popen[str]") -> bool:
         deadline = time.monotonic() + 600
@@ -531,12 +548,19 @@ class Station:
             self.probing = True
             try:
                 self.probe = probe_drives(self.cfg)
+                self.note_proven(self.probe)
                 self.probe_error = ""
             except Exception as e:
                 self.probe = {}
                 self.probe_error = explain(e)
             finally:
                 self.probing = False
+
+    def note_proven(self, drives: Dict[str, Dict[str, Any]]) -> None:
+        new = "".join(c for c in "AB" if drives.get(c, {}).get("proven") and c not in self.cfg.proven)
+        if new:
+            self.cfg.proven = "".join(sorted(self.cfg.proven + new))
+            self.cfg.save()
 
     def state(self) -> Dict[str, Any]:
         self.last_seen = time.monotonic()
@@ -569,8 +593,10 @@ class Station:
                              "label": disk_label(image) if present else ""})
             elif self.running:
                 slot = self.bridge.slots.get(name, {})
+                self.note_proven({letter: slot})
                 # Once per disk: this reads the real drive, and an unreadable track isn't cached.
                 if self.bridge.ready and slot.get("disk") and "label" not in slot:
+                    slot["label"] = ""                 # before reading: the page asks every second
                     slot["label"] = disk_label(str(info["file"]))
                 info.update(slot)
             elif letter in self.probe:
@@ -606,6 +632,12 @@ class Station:
             step("Greaseweazle", ok, self.probe_error if board else
                  "Plug the unit's USB cable into this computer and turn on its power supply.")
         step("Disk driver", self.driver_ok, driver_hint())
+        if board and self.cfg.left:
+            sides = [side for name, side in (("FD1", "left"), ("FD2", "right"))
+                     if not self.cfg.images.get(name) and self.cfg.letter(name) not in self.cfg.proven]
+            step("Swap detection", not sides, f"Open the {' and '.join(sides)} drive's lever with no disk in it "
+                 "and press Check disks. Until then that drive is read-only, so nothing can be saved to the wrong "
+                 "disk. If this never clears, set the drive's DC jumper.")
         if self.cfg.emulator_command.strip():
             return steps
         step("RetroArch", emu is not None,
@@ -656,6 +688,7 @@ class Station:
             except Exception as e:
                 return explain(e)
             self.probe = probe
+            self.note_proven(probe)
             with_disk = [k for k, v in probe.items() if v["disk"]]
             if len(with_disk) != 1:
                 return "no disk found" if not with_disk else "both drives hold a disk; leave only the left one in"
@@ -712,7 +745,7 @@ class Station:
             letter = self.cfg.letter(name)
             if letter not in ("A", "B"):
                 return "identify the left drive first"
-            self.job = {"name": name, "track": 0, "total": 0, "bad": [], "done": False, "error": "", "file": ""}
+            self.job = {"name": name, "track": 0, "total": 0, "bad": [], "odd": 0, "done": False, "error": "", "file": ""}
             threading.Thread(target=self._backup_worker, args=(name, letter), daemon=True).start()
             return "backing up " + name
 
@@ -728,6 +761,7 @@ class Station:
                 job["total"] = be.cyls * be.heads
                 chunks: List[bytes] = []
                 label = ""
+                in_a_row = 0
                 for cyl in range(be.cyls):
                     for head in range(be.heads):
                         data = be.read_track(cyl, head)
@@ -736,6 +770,14 @@ class Station:
                                 raise RuntimeError("the disk was changed during the backup; nothing saved")
                             job["bad"].append(f"{cyl}.{head}")
                             data = b"\0" * be.track_bytes
+                            in_a_row += 1
+                            if in_a_row >= BACKUP_GIVE_UP:
+                                raise RuntimeError(f"{in_a_row} tracks in a row won't read, so the backup stopped "
+                                                   "to spare the disk. It may be blank or another format, or "
+                                                   "the heads need cleaning.")
+                        else:
+                            in_a_row = 0
+                            job["odd"] += not be.standard_track(cyl, head)
                         if cyl == 0 and head == 0:
                             label = label_of(data)
                         chunks.append(data)
@@ -743,7 +785,9 @@ class Station:
                 if be.disk_changed():
                     raise RuntimeError("the disk was changed during the backup; nothing saved")
                 bad = len(job["bad"])
-                stem = (label or "disk") + (f" ({bad} unreadable tracks)" if bad else "")
+                odd = job["odd"]
+                stem = (label or "disk") + (f" ({bad} unreadable tracks)" if bad else "") + \
+                    (f" ({odd} non-standard tracks)" if odd else "")
                 path = store_image(self.library, b"".join(chunks), stem, ext)
                 job["file"] = path
                 self.note(f"{name}: saved {os.path.basename(path)}" + (f", {bad} track(s) unreadable" if bad else ""))

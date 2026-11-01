@@ -16,19 +16,25 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Callable, Dict, Optional, Protocol, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
 
 
 class DiskError(OSError):
     """A track could not be read or written, or the disk was changed."""
 
 
+RETRY_SECONDS = 30.0                      # how soon a track that wouldn't read is tried again
+LABEL_START, LABEL_END = 3, 11            # where a boot sector holds the disk's name
+
+
 class Backend(Protocol):
     cyls: int
     heads: int
     track_bytes: int
+    proven: bool                          # a swap on this drive is known to be seen
 
     def read_track(self, cyl: int, head: int) -> Optional[bytes]: ...
+    def standard_track(self, cyl: int, head: int) -> bool: ...
     def write_track(self, cyl: int, head: int, data: bytes) -> bool: ...
     def disk_changed(self) -> bool: ...
     def poll_change(self) -> bool: ...
@@ -46,6 +52,7 @@ class ImageBackend:
     def __init__(self, path: str, cyls: int, heads: int, track_bytes: int) -> None:
         self.path, self.cyls, self.heads, self.track_bytes = path, cyls, heads, track_bytes
         self.changed = False
+        self.proven = True
         self.readonly = not os.access(path, os.W_OK)
         self._ino = self._inode()
 
@@ -62,6 +69,9 @@ class ImageBackend:
         with open(self.path, "rb") as f:
             f.seek(self._offset(cyl, head))
             return f.read(self.track_bytes)
+
+    def standard_track(self, cyl: int, head: int) -> bool:
+        return True
 
     def write_track(self, cyl: int, head: int, data: bytes) -> bool:
         with open(self.path, "r+b") as f:
@@ -93,32 +103,70 @@ class ImageBackend:
         pass
 
 
+def is_standard(dat: Any) -> bool:
+    """Is a decoded track exactly what rewriting it would produce? A write rebuilds the whole
+    track from the format's plain layout, which would erase anything else on it: the extra
+    or duplicate sectors and deleted-data marks that copy protection uses, for one."""
+    from greaseweazle.codec.ibm.ibm import Mark
+    raw = getattr(dat, "raw", None)
+    if raw is None:
+        return False
+    expected = {(s.idam.c, s.idam.h, s.idam.r, s.idam.n) for s in dat.sectors}
+    seen = set()
+    for r in raw.sectors:
+        if r.idam.crc != 0:
+            continue
+        sector = (r.idam.c, r.idam.h, r.idam.r, r.idam.n)
+        if sector not in expected or sector in seen or (r.dam.crc == 0 and r.dam.mark != Mark.DAM):
+            return False
+        seen.add(sector)
+    return True
+
+
 class GwBoard:
     """One Greaseweazle, shared by the drives on its ribbon: only one can be selected at a time."""
 
     def __init__(self) -> None:
         from greaseweazle.tools import util
+        # Merely opening the board stops whatever it's doing, a write included, so another
+        # copy of this program must be turned away first and everything else kept out after.
+        port = util.find_port()
+        self._lock_fd: Optional[int] = None
         try:
-            self.usb = util.usb_open(None)
-        except SystemExit:                    # the library prints and exits on a firmware problem
-            raise RuntimeError("the Greaseweazle's firmware is too old or was interrupted; update it "
-                               "with the Greaseweazle tools: https://github.com/keirf/greaseweazle/wiki/")
-        try:                                  # two programs on one board would garble each other's commands
             import fcntl
-            fcntl.flock(self.usb.ser.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._lock_fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except ImportError:                   # Windows: a COM port can be opened only once anyway
             pass
         except OSError:
-            self.usb.ser.close()
+            self._unlock()
             raise
+        try:
+            self.usb = util.usb_open(port)
+        except SystemExit:                    # the library prints and exits on a firmware problem
+            self._unlock()
+            raise RuntimeError("the Greaseweazle's firmware is too old or was interrupted; update it "
+                               "with the Greaseweazle tools: https://github.com/keirf/greaseweazle/wiki/")
+        except Exception:
+            self._unlock()
+            raise
+        if self._lock_fd is not None:
+            import termios
+            fcntl.ioctl(self.usb.ser.fileno(), termios.TIOCEXCL)
         # The board remembers each head's position between programs, and a wrong memory puts
         # every track off by that much. A reset makes the first seek find track 0 by its sensor.
         self.usb.power_on_reset()
         self.lock = threading.RLock()
         self.selected: Optional["GwBackend"] = None
 
+    def _unlock(self) -> None:
+        if self._lock_fd is not None:
+            os.close(self._lock_fd)
+            self._lock_fd = None
+
     def close(self) -> None:
         self.usb.ser.close()
+        self._unlock()
 
     def __enter__(self) -> "GwBoard":
         return self
@@ -138,7 +186,8 @@ class GwBackend:
     READ_ATTEMPTS = 4
     WRITE_ATTEMPTS = 3
 
-    def __init__(self, drive_letter: str, fmt_name: str, board: GwBoard, cyl_offset: int = 0) -> None:
+    def __init__(self, drive_letter: str, fmt_name: str, board: GwBoard, cyl_offset: int = 0,
+                 proven: bool = False) -> None:
         # Imported here so tests that only use ImageBackend don't need the hardware stack.
         from greaseweazle.tools import util
         from greaseweazle.codec import codec
@@ -167,6 +216,8 @@ class GwBackend:
         self._new_change = False
         self._empty = False
         self._empty_seen = 0.0
+        self.proven = proven         # pin 34 has been seen low: a swap on this drive will be noticed
+        self._odd: Set[Tuple[int, int]] = set()   # tracks a write would rebuild into something else
         self._pins = self._pins_supported()
 
     def _pins_supported(self) -> bool:
@@ -217,17 +268,20 @@ class GwBackend:
         if not self._pins:
             return                       # older firmware without pin reads: no detection
         if not self._usb.get_pin(34):
+            self.proven = True
             # a step clears the latch; if it reads low again there is no disk at all
             if self._empty and time.monotonic() - self._empty_seen < 2.0:
                 return                   # known empty: don't step the head on every poll
+            before = self._changed, self._new_change
+            if self._last_use:           # first: the steps clear the latch and may then fail
+                self._changed = self._new_change = True
+            was_empty = self._empty
             self._usb.seek(1, 0)
             self._usb.seek(0, 0)
-            was_empty = self._empty
             self._empty = not self._usb.get_pin(34)
             self._empty_seen = time.monotonic()
-            if self._last_use and not (was_empty and self._empty):
-                self._changed = True
-                self._new_change = True
+            if was_empty and self._empty:
+                self._changed, self._new_change = before
         else:
             self._empty = False
 
@@ -274,7 +328,8 @@ class GwBackend:
         with self._lock:
             self._select()
             try:
-                return not self._pins or not self._usb.get_pin(28)
+                # A drive that can't report a swap would get the old disk's saves on the new one.
+                return not self._pins or not self.proven or not self._usb.get_pin(28)
             finally:
                 if not self._active:
                     self._deselect()
@@ -303,11 +358,22 @@ class GwBackend:
                     dat.decode_flux(flux, pll)
                 if dat.nr_missing() == 0:
                     self._last_use = time.monotonic()
+                    if is_standard(dat):
+                        self._odd.discard((cyl, head))
+                    else:
+                        self._odd.add((cyl, head))
                     return bytes(dat.get_img_track())
                 if attempt == self.READ_ATTEMPTS - 2:   # re-seat the head before the last try
+                    self._check_change()                # these seeks would clear the latch
+                    if self._changed:
+                        return None
                     self._usb.seek(0, 0)
                     self._usb.seek(cyl + self._cyl_offset, head)
             return None
+
+    def standard_track(self, cyl: int, head: int) -> bool:
+        """After a read of that track: would rewriting it keep everything on it?"""
+        return (cyl, head) not in self._odd
 
     def write_track(self, cyl: int, head: int, data: bytes) -> bool:
         from greaseweazle.track import MasterTrack
@@ -388,15 +454,23 @@ class TrackDisk:
         self.last_write = 0.0
         self.broken: Optional[str] = None     # set once the disk is unsafe to write
         self.verified = False                 # track 0 of this disk has decoded on this drive
+        self._failed: Dict[int, float] = {}   # tracks that wouldn't read, and when they last failed
+        self._odd: Set[int] = set()           # tracks a write would rebuild into something else
 
     # tracks ---------------------------------------------------------------
     def _track(self, idx: int) -> bytearray:
         t = self._cache.get(idx)
         if t is None:
             cyl, head = divmod(idx, self.b.heads)
+            # A game or BIOS can retry a bad spot forever, with the head on it each time.
+            if time.monotonic() - self._failed.get(idx, -RETRY_SECONDS) < RETRY_SECONDS:
+                raise DiskError(5, f"can't read track {cyl}.{head}")
             data = self.b.read_track(cyl, head)
             if data is None:
+                self._failed[idx] = time.monotonic()
                 raise DiskError(5, f"can't read track {cyl}.{head}")
+            if not self.b.standard_track(cyl, head):
+                self._odd.add(idx)
             t = bytearray(data)
             self._cache[idx] = t
             if idx == 0:
@@ -435,20 +509,42 @@ class TrackDisk:
             mv = memoryview(data).cast("B")
             n = min(len(mv), max(0, self.size - offset))
             tb = self.b.track_bytes
-            if n:
-                for idx in range(offset // tb, (offset + n - 1) // tb + 1):
-                    self._track(idx)         # read every track touched first: all or nothing
+            changes: List[Tuple[int, int, int, int]] = []
             done = 0
-            while done < n:
+            while done < n:                  # read every track touched first: all or nothing
                 idx, off = divmod(offset + done, tb)
                 chunk = min(n - done, tb - off)
-                t = self._track(idx)
-                if t[off:off + chunk] != mv[done:done + chunk]:
-                    t[off:off + chunk] = mv[done:done + chunk]
-                    self._dirty.add(idx)
+                if self._track(idx)[off:off + chunk] != mv[done:done + chunk]:
+                    self._check_writable(idx)
+                    changes.append((idx, off, done, chunk))
                 done += chunk
+            if changes and offset < LABEL_END and offset + n > LABEL_START:
+                self._check_label(offset, mv[:n])
+            for idx, off, pos, chunk in changes:
+                self._cache[idx][off:off + chunk] = mv[pos:pos + chunk]
+                self._dirty.add(idx)
             self.last_write = time.monotonic()
             return n
+
+    def _check_writable(self, idx: int) -> None:
+        cyl, head = divmod(idx, self.b.heads)
+        if idx in self._odd:
+            raise DiskError(30, f"track {cyl}.{head} holds more than a plain track can, probably copy "
+                                "protection; writing it would erase that, so the write is refused")
+        if idx in self._failed:
+            raise DiskError(30, f"track {cyl}.{head} failed to read earlier, so what's being written "
+                                "may be a blank stand-in for it; the write is refused")
+
+    def _check_label(self, offset: int, data: memoryview) -> None:
+        """A disk's boot sector names it, and nothing a game does to a disk changes that. A write
+        that does is a whole image of another disk, from a program that missed a swap: stop it
+        here, at its first sector, before the rest of the image lands on this disk."""
+        label = bytearray(self._track(0)[LABEL_START:LABEL_END])
+        for i in range(max(offset, LABEL_START), min(offset + len(data), LABEL_END)):
+            label[i - LABEL_START] = data[i - offset]
+        if label != self._track(0)[LABEL_START:LABEL_END]:
+            self.broken = "a write tried to change the disk's own name, so it's meant for another disk"
+            raise DiskError(30, self.broken)
 
     @property
     def dirty_tracks(self) -> int:
@@ -471,7 +567,8 @@ class TrackDisk:
                                "to the new disk")
                 raise DiskError(5, self.broken)
             written = 0
-            for idx in sorted(self._dirty):
+            # Last track first: a directory near the start must not name data not yet written.
+            for idx in sorted(self._dirty, reverse=True):
                 cyl, head = divmod(idx, self.b.heads)
                 if not self.b.write_track(cyl, head, bytes(self._cache[idx])):
                     self.broken = f"track {cyl}.{head} could not be written and verified"
@@ -488,6 +585,8 @@ class TrackDisk:
             lost = len(self._dirty)
             self._cache.clear()
             self._dirty.clear()
+            self._failed.clear()
+            self._odd.clear()
             self.broken = None
             self.verified = False
             return lost

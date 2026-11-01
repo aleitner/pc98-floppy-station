@@ -168,7 +168,7 @@ a { color: var(--cyan); }
     var j = S.job; if (!j.name || j.name !== name) return "";
     if (!j.done) return "reading track " + j.track + " of " + j.total;
     if (j.error) return "failed: " + esc(j.error);
-    return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.library.folder);
+    return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + (j.odd ? ", " + j.odd + " non-standard, probably copy protection, which the image can't hold" : "") + " in " + esc(S.library.folder);
   }
   function link(url, text) { return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>'; }
   function linked(text) { return esc(text).replace(/https:\/\/[^\s<]*[^\s<.,;]/g, function (u) { return link(u, u); }); }

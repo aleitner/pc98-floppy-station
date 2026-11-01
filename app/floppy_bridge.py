@@ -43,7 +43,10 @@ T = TypeVar("T")
 
 
 def status(msg: str) -> None:
-    print("STATUS " + msg, flush=True)
+    try:
+        print("STATUS " + msg, flush=True)
+    except (OSError, ValueError):             # the window has gone: saving matters more than saying so
+        pass
 
 
 @dataclass
@@ -55,6 +58,7 @@ class Slot:
     protected: bool = False
     changed_at: float = field(default_factory=time.time)
     polled: float = 0.0
+    generation: int = 1                       # which disk this is; a file opened on an older one can't write
 
 
 class BridgeFS(mfusepy.Operations):
@@ -102,6 +106,7 @@ class BridgeFS(mfusepy.Operations):
                 status(f"error {slot.name}: disk changed with {lost} track(s) not yet saved; "
                        "they were NOT written to the new disk")
             slot.changed_at = time.time()
+            slot.generation += 1
         was = slot.protected
         slot.protected = slot.backend.write_protected()   # pin 28 can settle after the swap
         if changed:
@@ -136,7 +141,7 @@ class BridgeFS(mfusepy.Operations):
                 return False
             if slot.disk.dirty_tracks == 0:
                 status(f"{slot.name}: nothing saved: the disk had been changed")
-                return True
+                return False
             try:
                 slot.disk.flush_to_disk()
             except DiskError as e:
@@ -187,7 +192,7 @@ class BridgeFS(mfusepy.Operations):
         self._run(slot, lambda: None)
         if flags & (os.O_WRONLY | os.O_RDWR) and (slot.protected or slot.disk.broken):
             raise mfusepy.FuseOSError(errno.EROFS)
-        return 0
+        return slot.generation
 
     def read(self, path: str, size: int, offset: int, fh: int) -> bytes:
         if path == "/play.cmd":
@@ -202,6 +207,9 @@ class BridgeFS(mfusepy.Operations):
         def go() -> int:
             if slot.protected or slot.disk.broken:
                 raise mfusepy.FuseOSError(errno.EROFS)
+            if fh != slot.generation:             # opened before a swap: it means the old disk
+                status(f"error {slot.name}: a write for the disk taken out was refused")
+                raise mfusepy.FuseOSError(errno.EIO)
             return slot.disk.write_at(offset, data)
         return self._run(slot, go)
 
@@ -247,9 +255,9 @@ def disk_state(slot: Slot) -> str:
 
 
 def slot_line(slot: Slot) -> str:
-    """One line a program can parse: `slot FD1 disk=1 protected=0`."""
+    """One line a program can parse: `slot FD1 disk=1 protected=0 proven=1`."""
     has = slot.backend.has_disk()
-    return f"slot {slot.name} disk={int(has)} protected={int(has and slot.protected)}"
+    return f"slot {slot.name} disk={int(has)} protected={int(has and slot.protected)} proven={int(slot.backend.proven)}"
 
 
 def watch_stdin(ops: BridgeFS, mountpoint: str) -> None:
@@ -290,6 +298,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="steps from where a drive thinks track 0 is to the real one")
     ap.add_argument("--image", action="append", default=[], metavar="FD1=PATH",
                     help="an image file standing in for that drive")
+    ap.add_argument("--proven", default="", metavar="AB",
+                    help="drives known to report a swap; any other is read-only until seen empty")
     ap.add_argument("--control-stdin", action="store_true",
                     help="stop when 'stop' arrives on stdin or stdin closes (for a controlling program)")
     args = ap.parse_args(argv)
@@ -329,7 +339,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             elif wanted[name] != "NONE":
                 if board is None:
                     board = GwBoard()
-                backends[name] = GwBackend(wanted[name], args.format, board, offsets.get(wanted[name], 0))
+                backends[name] = GwBackend(wanted[name], args.format, board, offsets.get(wanted[name], 0),
+                                           wanted[name] in args.proven.upper())
         for name, backend in backends.items():
             slot = Slot(name, backend, TrackDisk(backend, log=slot_logger(name)))
             slot.protected = backend.write_protected()

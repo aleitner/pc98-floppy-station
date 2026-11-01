@@ -7,9 +7,11 @@ covered notch is honoured.
 from __future__ import annotations
 
 import sys
-from typing import Dict, Optional, Tuple
+import threading
+from typing import Any, Dict, List, Optional, Tuple
 
-from floppy_drive import DiskError, ImageBackend, TrackDisk
+import floppy_drive
+from floppy_drive import DiskError, GwBackend, ImageBackend, TrackDisk, is_standard
 
 fails = 0
 
@@ -29,17 +31,26 @@ class FakeDrive:
                                                    for c in range(self.cyls) for h in range(self.heads)}
         self.unreadable: set[Tuple[int, int]] = set()
         self.unwritable: set[Tuple[int, int]] = set()
+        self.odd: set[Tuple[int, int]] = set()
         self.changed = False
         self.writes = 0
+        self.reads = 0
+        self.order: List[Tuple[int, int]] = []
+        self.proven = True
 
     def read_track(self, cyl: int, head: int) -> Optional[bytes]:
+        self.reads += 1
         return None if (cyl, head) in self.unreadable else self.data[(cyl, head)]
+
+    def standard_track(self, cyl: int, head: int) -> bool:
+        return (cyl, head) not in self.odd
 
     def write_track(self, cyl: int, head: int, data: bytes) -> bool:
         if (cyl, head) in self.unwritable:
             return False
         self.data[(cyl, head)] = bytes(data)
         self.writes += 1
+        self.order.append((cyl, head))
         return True
 
     def disk_changed(self) -> bool:
@@ -62,7 +73,55 @@ class FakeDrive:
         pass
 
 
+class FakeUSB:
+    """The board's view of a drive: pin 34 is the latch a step clears when a disk is in."""
+
+    def __init__(self, disk: bool) -> None:
+        self.disk = disk
+        self.latch = False
+        self.fail_seek = False
+
+    def get_pin(self, n: int) -> bool:
+        return not self.latch if n == 34 else True
+
+    def seek(self, cyl: int, head: int) -> None:
+        self.latch = not self.disk             # the step clears it, whatever happens next
+        if self.fail_seek:
+            raise OSError("USB went away")
+
+    def set_bus_type(self, bus: int) -> None:
+        pass
+
+    def drive_select(self, unit: int) -> None:
+        pass
+
+    def drive_deselect(self) -> None:
+        pass
+
+
+def gw_backend(usb: FakeUSB, proven: bool, used: bool = False) -> GwBackend:
+    """A real GwBackend's swap logic on a fake board."""
+    class Board:
+        selected = None
+        lock = threading.RLock()
+
+    class Bus:
+        value = 1
+
+    class Unit:
+        unit_id = 0
+        bus = Bus
+
+    be = GwBackend.__new__(GwBackend)
+    fields: Dict[str, Any] = dict(_board=Board, _usb=usb, _lock=Board.lock, _drive=Unit, _cyl_offset=0, _active=False,
+                                  _last_use=1.0 if used else 0.0, _ticks_per_rev=0.0, _changed=False,
+                                  _new_change=False, _empty=False, _empty_seen=0.0, proven=proven, _pins=True)
+    be.__dict__.update(fields)
+    return be
+
+
 def main() -> int:
+    floppy_drive.RETRY_SECONDS = 0.0             # the first tests clear faults and go straight on
     # 1. No write until track 0 decodes on this drive.
     d = FakeDrive()
     d.unreadable.add((0, 0))
@@ -115,7 +174,7 @@ def main() -> int:
     # 5. A write that can't be verified marks the disk broken; later writes are refused.
     d2 = FakeDrive()
     disk2 = TrackDisk(d2)
-    disk2.write_at(0, b"q" * 8)
+    disk2.write_at(16, b"q" * 8)
     d2.unwritable.add((0, 0))
     try:
         disk2.flush_to_disk()
@@ -139,8 +198,14 @@ def main() -> int:
         check(disk3.dirty_tracks == 0 and disk3._cache.get(1) is None or disk3._cache[1][512:] != b"w" * 512,
               "a multi-track write stops before changing anything if a track is unreadable")
     d3.unreadable.clear()
+    try:
+        disk3.write_at(1024 + 512, b"w" * 1024)
+        check(False, "a track that failed earlier can't be written, even if it reads now")
+    except DiskError:
+        check(disk3.dirty_tracks == 0, "a track that failed earlier can't be written, even if it reads now")
+    disk3.new_disk()
     disk3.write_at(1024 + 512, b"w" * 1024)
-    check(disk3.dirty_tracks == 2, "the same write succeeds once every track reads")
+    check(disk3.dirty_tracks == 2, "the next disk starts clean")
 
     # 6. A read-only image file counts as write-protected, like a covered notch.
     import os
@@ -153,6 +218,106 @@ def main() -> int:
     os.chmod(path, 0o644)
     check(not ImageBackend(path, 4, 2, 1024).write_protected(), "writable image counts as writable")
     os.remove(path)
+
+    # 7. A bad track isn't hammered: a retry within the window doesn't touch the drive.
+    floppy_drive.RETRY_SECONDS = 30.0
+    d4 = FakeDrive()
+    disk4 = TrackDisk(d4)
+    d4.unreadable.add((2, 0))
+    for _ in range(5):
+        try:
+            disk4.read_at(4 * 1024, 16)
+        except DiskError:
+            pass
+    check(d4.reads == 1, "five reads of a bad track reach the drive once")
+
+    # 8. A track holding more than plain sectors reads fine but can't be rewritten.
+    d5 = FakeDrive()
+    d5.odd.add((1, 0))
+    disk5 = TrackDisk(d5)
+    same = disk5.read_at(2 * 1024, 16)
+    disk5.write_at(2 * 1024, same)
+    check(disk5.dirty_tracks == 0, "writing a non-standard track's own bytes back changes nothing")
+    try:
+        disk5.write_at(2 * 1024, b"s" * 16)
+        check(False, "a real write to a non-standard track is refused")
+    except DiskError as e:
+        check(e.errno == 30 and disk5.dirty_tracks == 0, "a real write to a non-standard track is refused")
+    disk5.write_at(3 * 1024, b"s" * 16)
+    check(disk5.dirty_tracks == 1, "its neighbours stay writable")
+
+    # 9. A write that changes the disk's own name is another disk's image: stop it at once.
+    d6 = FakeDrive()
+    disk6 = TrackDisk(d6)
+    disk6.write_at(0, b"\x11\x22\x33")
+    disk6.write_at(11, b"after the name")
+    check(disk6.dirty_tracks == 1, "writes beside the disk's name are fine")
+    disk6.write_at(3, disk6.read_at(3, 8))
+    check(disk6.broken is None, "rewriting the same name is fine")
+    try:
+        disk6.write_at(0, b"AB" + b"OTHERDISK" + bytes(1013))
+        check(False, "a write changing the disk's name is refused")
+    except DiskError:
+        check(disk6.broken is not None, "a write changing the disk's name is refused")
+    try:
+        disk6.write_at(4 * 1024, b"rest of that image")
+        check(False, "the rest of that image is refused too")
+    except DiskError:
+        check(True, "the rest of that image is refused too")
+    disk6.new_disk()
+    disk6.write_at(4 * 1024, b"the next disk")
+    check(disk6.dirty_tracks == 1, "the next disk can be written")
+
+    # 10. The last track goes first, so a directory can't name data not yet written.
+    d7 = FakeDrive()
+    disk7 = TrackDisk(d7)
+    for t in (1, 5, 3):
+        disk7.write_at(t * 1024, b"o" * 8)
+    disk7.flush_to_disk()
+    check(d7.order == [(2, 1), (1, 1), (0, 1)], "saves are written last track first")
+
+    # 11. A drive that has never shown it can report a swap stays read-only.
+    usb = FakeUSB(disk=True)
+    be = gw_backend(usb, proven=False)
+    be.has_disk()
+    check(be.write_protected(), "a drive not yet proven is read-only")
+    usb.disk = False
+    usb.latch = True
+    be.has_disk()
+    check(be.proven and not be.write_protected(), "seeing the drive empty proves it")
+    check(not gw_backend(FakeUSB(disk=True), proven=True).write_protected(), "a proven drive stays proven")
+
+    # 12. A swap is remembered even if the check itself fails after clearing the latch.
+    usb = FakeUSB(disk=True)
+    be = gw_backend(usb, proven=True, used=True)
+    usb.latch, usb.fail_seek = True, True
+    try:
+        be.disk_changed()
+    except OSError:
+        pass
+    usb.fail_seek = False
+    check(not usb.latch and be.poll_change(), "a swap survives a check that failed halfway")
+    check(not be.poll_change(), "and is reported once")
+
+    # 13. Only a track that rewriting would keep intact counts as standard.
+    from greaseweazle.codec import codec
+    from greaseweazle.codec.ibm.ibm import IDAM, Mark, Sector
+    disk_def = codec.get_diskdef("pc98.2hd")
+    assert disk_def is not None
+    made = disk_def.mk_track(10, 0)
+    assert made is not None
+    made.set_img_track(bytes(range(256)) * 32)
+    plain = disk_def.decode_flux(10, 0, made.master_track().flux())
+    check(plain is not None and plain.nr_missing() == 0 and is_standard(plain), "a plain track is standard")
+    r = plain.raw.sectors[0]
+    plain.raw.sectors.append(Sector(IDAM(0, 1, 0, 10, 0, 9, 3), r.dam))
+    check(not is_standard(plain), "an extra sector is not standard")
+    plain.raw.sectors.pop()
+    plain.raw.sectors.append(Sector(IDAM(0, 1, 0, r.idam.c, r.idam.h, r.idam.r, r.idam.n), r.dam))
+    check(not is_standard(plain), "a duplicate sector is not standard")
+    plain.raw.sectors.pop()
+    r.dam.mark = Mark.DDAM
+    check(not is_standard(plain), "a deleted-data mark is not standard")
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     return 1 if fails else 0

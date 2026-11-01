@@ -92,9 +92,40 @@ def main() -> int:
         log.flush()
         check("NOT written" in open(log.name).read(), "the lost write is reported")
 
+        # a program that held the file open across a swap can't write to the new disk
+        held = open(fd1, "r+b", buffering=0)
+        held.seek(40 * 1024)
+        held.read(16)
+        fourth = os.urandom(SIZE)
+        open(tmp, "wb").write(fourth)
+        os.replace(tmp, a)
+        time.sleep(0.7)
+        try:
+            held.seek(40 * 1024)
+            held.write(b"OLD-DISK" * 128)
+            check(False, "a file opened before a swap can't write")
+        except OSError:
+            check(True, "a file opened before a swap can't write")
+        held.close()
+        time.sleep(1.5)
+        check(open(a, "rb").read() == fourth, "the new disk is untouched")
+        with open(fd1, "r+b", buffering=0) as f:
+            f.seek(40 * 1024)
+            f.write(b"NEWSAVE!" * 128)
+        check(wait_for(lambda: open(a, "rb").read()[40 * 1024:41 * 1024] == b"NEWSAVE!" * 128, 5),
+              "a file opened after the swap saves normally")
+
+        # a whole image of another disk stops at its first sector
+        with open(fd1, "r+b", buffering=0) as f:
+            try:
+                f.write(b"\xeb\x3cOTHERDISK" + bytes(1024 - 12))
+                check(False, "a write changing the disk's name is refused")
+            except OSError:
+                check(True, "a write changing the disk's name is refused")
+
         # unmounting saves what is still waiting
         with open(fd2, "r+b", buffering=0) as f:
-            f.seek(0)
+            f.seek(1024)
             f.write(b"LASTSAVE" * 128)
     finally:
         if sys.platform == "win32":                    # no unmount command there
@@ -105,7 +136,7 @@ def main() -> int:
             p.wait(10)
         except subprocess.TimeoutExpired:
             p.kill()
-    check(open(b, "rb").read(1024) == b"LASTSAVE" * 128, "unmounting saves pending writes")
+    check(open(b, "rb").read(2048)[1024:] == b"LASTSAVE" * 128, "unmounting saves pending writes")
     log.flush()
     print("".join("  " + line for line in open(log.name) if "error" in line.lower()))
     shutil.rmtree(d, ignore_errors=True)
