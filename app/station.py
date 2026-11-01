@@ -790,7 +790,8 @@ class Station:
                     (f" ({odd} non-standard tracks)" if odd else "")
                 path = store_image(self.library, b"".join(chunks), stem, ext)
                 job["file"] = path
-                self.note(f"{name}: saved {os.path.basename(path)}" + (f", {bad} track(s) unreadable" if bad else ""))
+                self.note(f"{name}: saved {path}" + (f", {bad} track(s) unreadable" if bad else "") +
+                          (f", {odd} non-standard, probably copy protection, which the image can't hold" if odd else ""))
         except RuntimeError as e:             # our own messages: no disk, disk changed
             job["error"] = str(e)
             self.note(f"{name}: backup failed: {e}")

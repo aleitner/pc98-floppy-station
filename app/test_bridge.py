@@ -66,6 +66,8 @@ def main() -> int:
     check("Stop, then Start" in floppy_bridge.said(RuntimeError("Track0 signal absent after seek to cylinder 0\n 1. Try")),
           "a head that lost its place says what to do")
     check(floppy_bridge.said(DiskError(5, "can't read track 3.0")) == "can't read track 3.0", "a disk error says itself")
+    check("in use" in floppy_bridge.said(RuntimeError("could not open port 'COM5': PermissionError(13, 'Access is denied.', None, 5)")),
+          "a COM port held by another program says so")
     d = tempfile.mkdtemp(prefix="bridgetest")
     m = os.path.join(d, "m")
     a, b = os.path.join(d, "a.hdm"), os.path.join(d, "b.hdm")

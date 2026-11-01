@@ -32,6 +32,8 @@ def plain_words(e: BaseException) -> str:
         return "a drive's head lost its place; press Stop, then Start, which sends it home"
     if "Track 0 not found" in text:
         return "a drive didn't respond; check its power cable and the ribbon"
+    if "Access is denied" in text:            # Windows, a COM port already open elsewhere
+        return "the Greaseweazle is in use by another program (gw, or another copy of this one)"
     code = getattr(e, "errno", None)
     if code is None and len(e.args) == 2 and isinstance(e.args[0], int):
         code = e.args[0]                      # termios.error carries (errno, text)
