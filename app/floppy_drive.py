@@ -98,7 +98,11 @@ class GwBoard:
 
     def __init__(self) -> None:
         from greaseweazle.tools import util
-        self.usb = util.usb_open(None)
+        try:
+            self.usb = util.usb_open(None)
+        except SystemExit:                    # the library prints and exits on a firmware problem
+            raise RuntimeError("the Greaseweazle's firmware is too old or was interrupted; update it "
+                               "with the Greaseweazle tools: https://github.com/keirf/greaseweazle/wiki/")
         try:                                  # two programs on one board would garble each other's commands
             import fcntl
             fcntl.flock(self.usb.ser.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

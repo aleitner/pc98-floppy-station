@@ -24,6 +24,7 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 h1 { font-family: var(--display); font-size: 46px; line-height: 1; margin: 0; color: #fff; }
 .kana { color: var(--green); margin: 2px 0 0; font-size: 17px; }
 .sys { color: var(--yellow); font-size: 15px; }
+.todo { margin: 4px 0; overflow-wrap: anywhere; }
 hr { border: 0; border-top: 2px dashed var(--ink-dim); opacity: .55; margin: 14px 0; }
 a { color: var(--cyan); }
 h2 { font-family: var(--display); font-size: 28px; line-height: 1; color: #fff; margin: 0 0 10px; }
@@ -76,14 +77,15 @@ a { color: var(--cyan); }
 </header>
 <hr>
 
+<div id="todo" class="box warn" hidden>
+  <h2>Before you can play <small>じゅんび</small></h2>
+  <div id="todolist"></div>
+</div>
+
 <div id="setup" class="box" hidden>
   <h2>First run <small>はじめに</small></h2>
   <p>The two drives need telling apart once. <strong>Put a disk in the LEFT drive only</strong>, close its lever, and press Check. The unit that holds a disk becomes the left drive.</p>
   <div class="row"><button type="button" id="identify">Check</button><span id="identmsg" class="msg"></span></div>
-</div>
-
-<div id="driverbox" class="box warn" hidden>
-  <p><strong>The disk driver isn't installed.</strong> <span id="driverhint"></span></p>
 </div>
 
 <div class="grid">
@@ -169,13 +171,16 @@ a { color: var(--cyan); }
     return "saved as " + esc(j.file.split(/[\\/]/).pop()) + (j.bad.length ? ", " + j.bad.length + " unreadable" : "") + " in " + esc(S.library.folder);
   }
   function link(url, text) { return '<a href="' + url + '" target="_blank" rel="noopener">' + text + '</a>'; }
-  function linked(text) { return esc(text).replace(/https:\/\/\S+\//g, function (u) { return link(u, u); }); }
+  function linked(text) { return esc(text).replace(/https:\/\/[^\s<]*[^\s<.,;]/g, function (u) { return link(u, u); }); }
   // Redrawing under the pointer would swallow a click on a link.
   function draw(el, html) { if (el._drawn !== html) { el._drawn = html; el.innerHTML = html; } }
   function render() {
     $("sys").textContent = S.system;
     $("setup").hidden = S.identified;
-    draw($("driverhint"), linked(S.driver.hint));
+    $("todo").hidden = S.setup.every(function (t) { return t.ok; });
+    draw($("todolist"), S.setup.map(function (t) {
+      return '<p class="todo"><b class="' + (t.ok ? "" : "lock") + '">[' + (t.ok ? " OK " : " -- ") + ']</b> ' + esc(t.name) + (t.how ? ': ' + linked(t.how) : '') + '</p>';
+    }).join(""));
     drive($("fd1"), "FD1", S.drives.FD1);
     drive($("fd2"), "FD2", S.drives.FD2);
     $("board").textContent = S.board.present ? (S.board.port ? "connected on " + S.board.port : "connected, in use") : "not found";
@@ -188,14 +193,11 @@ a { color: var(--cyan); }
     var ss = $("startstop");
     ss.textContent = S.running ? "STOP" : "START";
     ss.disabled = !S.running && (S.busy || !S.driver.ok || (!S.all_images && (!S.identified || !S.board.present)));
-    $("driverbox").hidden = S.driver.ok;
     $("probe").disabled = S.busy;
     $("swap").disabled = S.busy || !S.identified;
     $("identify").disabled = S.busy;
-    draw($("emuline"), S.emulator.custom ? "your own command" :
-      S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" :
-      '<b class="bad">RetroArch with the PC-98 core not found.</b> Install ' + link("https://www.retroarch.com/?page=platforms", "RetroArch") +
-      ', then add the core "NEC - PC-98 (Neko Project II Kai)" from its Online Updater. Or open the two files in your own emulator.');
+    $("emuline").innerHTML = S.emulator.custom ? "your own command" :
+      S.emulator.found ? "<b>" + esc(S.emulator.name) + "</b> found" : '<b class="bad">not set up yet</b>';
     $("play").disabled = !(S.running && S.ready && (S.emulator.found || S.emulator.custom));
     if (document.activeElement !== $("emucmd")) $("emucmd").value = S.config.emulator_command || "";
     var log = $("log"); var atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;

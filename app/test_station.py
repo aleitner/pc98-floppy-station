@@ -195,6 +195,30 @@ def main() -> int:
         check(post("api/settings", {"image": {"FD1": "", "FD2": ""}})["message"] == "saved", "back to the drives")
         check(get("api/state")["drives"]["FD1"]["image"] == "", "drives are drives again")
 
+        if sys.platform == "linux":
+            def item(name: str) -> Dict[str, Any]:
+                return next((t for t in get("api/state")["setup"] if t["name"] == name), {})
+            if not os.path.isdir("/var/lib/flatpak/app/org.libretro.RetroArch"):
+                check(item("RetroArch").get("ok") is False and "retroarch.com" in item("RetroArch")["how"],
+                      "a missing RetroArch is listed with where to get it")
+            base = os.path.join(d, ".var/app/org.libretro.RetroArch/config/retroarch")
+            os.makedirs(os.path.join(d, ".local/share/flatpak/app/org.libretro.RetroArch"))
+            check(item("PC-98 core").get("ok") is False, "next, a missing core is listed")
+            bios = os.path.join(d, "own bios")
+            os.makedirs(os.path.join(base, "cores"))
+            with open(os.path.join(base, "retroarch.cfg"), "w") as cfg:
+                cfg.write(f'system_directory = "{bios}"\n')
+            open(os.path.join(base, "cores", "np2kai_libretro.so"), "w").close()
+            check(item("PC-98 core").get("ok") is True, "the core's line clears once it's there")
+            how = item("BIOS files").get("how", "")
+            check(os.path.join(bios, "np2kai") in how and "FONT.ROM" in how,
+                  "missing BIOS files are named, with the folder RetroArch's own settings give")
+            os.makedirs(os.path.join(bios, "np2kai"))
+            for n in ("bios.rom", "ITF.ROM", "sound.rom", "font.bmp"):
+                open(os.path.join(bios, "np2kai", n), "w").close()
+            check(item("BIOS files").get("ok") is True, "BIOS files are found in either case, with either font")
+            check(get("api/state")["emulator"]["found"] is True, "the emulator counts as set up")
+
         post("api/bye", {"token": token})
         check(wait_for(lambda: p.poll() is not None, 15), "program ends after the page says goodbye")
     finally:

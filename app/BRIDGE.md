@@ -38,8 +38,9 @@ whenever a system update changes the Python version.
 
 A window opens: a bare browser window where a Chromium-family browser is installed, otherwise
 a browser tab, at `http://127.0.0.1:9801`. It shows whether the Greaseweazle and the filesystem
-layer were found, both drives with their disk state, and a Start button. If the filesystem
-layer is missing, the window says so; install it and start the program again. Starting the
+layer were found, both drives with their disk state, and a Start button. Anything missing,
+including RetroArch, the core and the BIOS files, is listed at the top with what to do, and
+its line turns OK by itself once it's done. Starting the
 program a second time only brings the window back.
 
 **First run:** put a disk in the LEFT drive only, close its lever and press Check. The unit

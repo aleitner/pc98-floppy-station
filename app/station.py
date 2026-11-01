@@ -231,20 +231,22 @@ def board_port(max_age: float = 3.0) -> Optional[str]:
 
 
 def driver_check() -> Tuple[bool, str]:
-    """Can the FUSE layer be loaded? Decided once per start: installing it means restarting."""
+    """Can the bridge mount? Asked again while the answer is no, so installing it is enough."""
     try:
         import mfusepy  # noqa: F401
-        return True, "ok"
     except Exception as e:
         return False, str(e)
+    if SYSTEM == "Linux" and not (shutil.which("fusermount3") or shutil.which("fusermount")):
+        return False, "the library is there but its fusermount command isn't"
+    return True, "ok"
 
 
 def driver_hint() -> str:
     if SYSTEM == "Windows":
-        return "Install WinFsp from https://winfsp.dev/rel/ and start this program again."
+        return "Install WinFsp from https://winfsp.dev/rel/"
     if SYSTEM == "Darwin":
-        return "Install FUSE-T from https://www.fuse-t.org/ (or macFUSE) and start this program again."
-    return "Install your distribution's fuse3 package (the fusermount3 command) and start this program again."
+        return "Install FUSE-T from https://www.fuse-t.org/"
+    return "Install your distribution's fuse3 package."
 
 
 def explain(e: BaseException) -> str:
@@ -370,33 +372,79 @@ class Bridge:
 
 
 # -- emulator ------------------------------------------------------------------------
-def find_retroarch() -> Optional[Tuple[List[str], str]]:
-    """(command prefix, core path) for RetroArch with the Neko Project II kai core, if installed."""
+@dataclass
+class RetroArch:
+    """An installed RetroArch: how to run it, and where it keeps cores and BIOS files."""
+    cmd: List[str]
+    cores: str
+    system: str
+
+    @property
+    def core(self) -> str:
+        return os.path.join(self.cores, "np2kai_libretro" + {"Windows": ".dll", "Darwin": ".dylib"}.get(SYSTEM, ".so"))
+
+    @property
+    def bios_folder(self) -> str:
+        return os.path.join(self.system, "np2kai")
+
+    def missing_bios(self) -> List[str]:
+        try:
+            have = {n.lower() for n in os.listdir(self.bios_folder)}
+        except OSError:
+            have = set()
+        missing = [n for n in ("BIOS.ROM", "ITF.ROM", "SOUND.ROM") if n.lower() not in have]
+        if not have & {"font.rom", "font.bmp"}:
+            missing.append("FONT.ROM")
+        return missing
+
+
+def retroarch_at(cmd: List[str], base: str) -> RetroArch:
+    """RetroArch's folders: under `base` unless its own settings file says otherwise."""
+    dirs = {"libretro_directory": os.path.join(base, "cores"), "system_directory": os.path.join(base, "system")}
+    for cfg in (os.path.join(base, "retroarch.cfg"), os.path.join(base, "config", "retroarch.cfg")):
+        try:
+            with open(cfg, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            continue
+        for line in lines:
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip('"')
+            if key in dirs and value and value != "default":
+                if value.startswith(":"):         # ":\\cores" means beside RetroArch itself
+                    value = os.path.join(base, value[1:].lstrip("/\\"))
+                dirs[key] = os.path.expanduser(value)
+        break
+    return RetroArch(cmd, dirs["libretro_directory"], dirs["system_directory"])
+
+
+def find_retroarch() -> Optional[RetroArch]:
+    """The installed RetroArch, preferring one that already has the PC-98 core."""
     home = os.path.expanduser("~")
+    found: List[RetroArch] = []
     if SYSTEM == "Linux":
         for base in (os.path.join(home, ".local/share/flatpak/app/org.libretro.RetroArch"),
                      "/var/lib/flatpak/app/org.libretro.RetroArch"):
-            core = os.path.join(home, ".var/app/org.libretro.RetroArch/config/retroarch/cores/np2kai_libretro.so")
-            if os.path.isdir(base) and os.path.isfile(core):
-                return ["flatpak", "run", "org.libretro.RetroArch"], core
+            if os.path.isdir(base):
+                found.append(retroarch_at(["flatpak", "run", "org.libretro.RetroArch"],
+                                          os.path.join(home, ".var/app/org.libretro.RetroArch/config/retroarch")))
+                break
         exe = shutil.which("retroarch")
-        core = os.path.join(home, ".config/retroarch/cores/np2kai_libretro.so")
-        if exe and os.path.isfile(core):
-            return [exe], core
+        if exe:
+            found.append(retroarch_at([exe], os.path.join(home, ".config/retroarch")))
     elif SYSTEM == "Windows":
         appdata = os.environ.get("APPDATA", "")
         for exe in (os.path.join(appdata, "RetroArch", "retroarch.exe"),
                     r"C:\RetroArch-Win64\retroarch.exe", r"C:\RetroArch\retroarch.exe",
                     r"C:\Program Files (x86)\Steam\steamapps\common\RetroArch\retroarch.exe"):
-            core = os.path.join(os.path.dirname(exe), "cores", "np2kai_libretro.dll")
-            if os.path.isfile(exe) and os.path.isfile(core):
-                return [exe], core
+            if os.path.isfile(exe):
+                found.append(retroarch_at([exe], os.path.dirname(exe)))
     elif SYSTEM == "Darwin":
         exe = "/Applications/RetroArch.app/Contents/MacOS/RetroArch"
-        core = os.path.join(home, "Library/Application Support/RetroArch/cores/np2kai_libretro.dylib")
-        if os.path.isfile(exe) and os.path.isfile(core):
-            return [exe], core
-    return None
+        if os.path.isfile(exe):
+            found.append(retroarch_at([exe], os.path.join(home, "Library/Application Support/RetroArch")))
+    with_core = [r for r in found if os.path.isfile(r.core)]
+    return with_core[0] if with_core else found[0] if found else None
 
 
 def emulator_command(cfg: Config) -> Union[List[str], str, None]:
@@ -413,10 +461,9 @@ def emulator_command(cfg: Config) -> Union[List[str], str, None]:
         import shlex
         return shlex.split(filled)
     found = find_retroarch()
-    if not found:
+    if not found or not os.path.isfile(found.core):
         return None
-    prefix, core = found
-    return prefix + ["-L", core, play]
+    return found.cmd + ["-L", found.core, play]
 
 
 def launch_emulator(cfg: Config) -> str:
@@ -425,7 +472,7 @@ def launch_emulator(cfg: Config) -> str:
     except ValueError as e:
         return f"the emulator command can't be read: {e}"
     if cmd is None:
-        return "RetroArch with the Neko Project II kai core was not found; open the two files in your emulator"
+        return "the emulator isn't set up yet; see the list at the top"
     try:
         run_external(cmd)
     except OSError as e:
@@ -441,6 +488,8 @@ class Station:
         self.bridge = Bridge(self.note)
         self.token = secrets.token_urlsafe(16)
         self.driver_ok, self.driver_msg = driver_check()
+        self.driver_asked = time.monotonic()
+        self.board_seen = False
         self.probe: Dict[str, Dict[str, Any]] = {}
         self.probe_error = ""
         self.probing = False
@@ -500,6 +549,13 @@ class Station:
         cfg = self.cfg
         ext = EXT[cfg.format]
         board = None if self.busy else board_port()
+        if not self.driver_ok and time.monotonic() - self.driver_asked > 3:
+            self.driver_ok, self.driver_msg = driver_check()
+            self.driver_asked = time.monotonic()
+        if not self.busy:
+            if board and not self.board_seen:      # plugged in just now: look at the drives
+                threading.Thread(target=self.refresh_probe, daemon=True).start()
+            self.board_seen = board is not None
         drives: Dict[str, Any] = {}
         for name in SLOTS:
             letter = cfg.letter(name)
@@ -521,20 +577,46 @@ class Station:
                 info.update(self.probe[letter])
             drives[name] = info
         emu = find_retroarch()
+        emu_ok = emu is not None and os.path.isfile(emu.core)
         return {
             "app": APP_NAME, "version": VERSION, "system": SYSTEM,
             "board": {"present": self.busy or board is not None, "port": board},
-            "driver": {"ok": self.driver_ok, "hint": "" if self.driver_ok else driver_hint(), "detail": self.driver_msg},
+            "driver": {"ok": self.driver_ok},
+            "setup": self.setup_list(board is not None, emu),
             "running": self.running, "busy": self.busy, "ready": self.bridge.ready, "error": self.bridge.error,
             "identified": cfg.left in ("A", "B"), "all_images": self.all_images,
             "mountpoint": cfg.mountpoint, "play": cmd_path(cfg.mountpoint, "play.cmd"),
             "drives": drives, "probe_error": self.probe_error,
             "library": {"folder": self.library, "images": list_library(self.library, ext)},
-            "emulator": {"found": emu is not None, "custom": bool(cfg.emulator_command.strip()),
-                         "name": "RetroArch, Neko Project II kai core" if emu else ""},
+            "emulator": {"found": emu_ok, "custom": bool(cfg.emulator_command.strip()),
+                         "name": "RetroArch, Neko Project II kai core" if emu_ok else ""},
             "log": list(self.events), "message": self.message, "job": self.job,
             "config": asdict(cfg),
         }
+
+    def setup_list(self, board: bool, emu: Optional[RetroArch]) -> List[Dict[str, Any]]:
+        """Everything playing needs, each with what to do about it, in the order to do it."""
+        steps: List[Dict[str, Any]] = []
+
+        def step(name: str, ok: bool, how: str) -> None:
+            steps.append({"name": name, "ok": ok, "how": "" if ok else how})
+
+        if not self.all_images:
+            ok = self.busy or (board and not self.probe_error)
+            step("Greaseweazle", ok, self.probe_error if board else
+                 "Plug the unit's USB cable into this computer and turn on its power supply.")
+        step("Disk driver", self.driver_ok, driver_hint())
+        if self.cfg.emulator_command.strip():
+            return steps
+        step("RetroArch", emu is not None,
+             "Install it from https://www.retroarch.com/?page=platforms or open Use another emulator below.")
+        if emu is not None:
+            step("PC-98 core", os.path.isfile(emu.core), "In RetroArch: Online Updater, Core Downloader, "
+                 '"NEC - PC-98 (Neko Project II Kai)".')
+            missing = emu.missing_bios()
+            step("BIOS files", not missing, "These come from a real PC-98 and can't be included here. "
+                 f"Put your own {', '.join(missing)} in {emu.bios_folder}")
+        return steps
 
     # actions
     def start(self) -> str:

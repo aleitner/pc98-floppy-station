@@ -26,6 +26,10 @@ def plain_words(e: BaseException) -> str:
     """A board or drive failure in plain words. The libraries raise system errors as they
     come: a bare errno tuple, a serial exception."""
     text = str(e)
+    if "firmware" in text:
+        return text
+    if "Track 0 not found" in text:
+        return "a drive didn't respond; check its power cable and the ribbon"
     code = getattr(e, "errno", None)
     if code is None and len(e.args) == 2 and isinstance(e.args[0], int):
         code = e.args[0]                      # termios.error carries (errno, text)
