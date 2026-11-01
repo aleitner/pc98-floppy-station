@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import List
 
 SIZE = 1232 * 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +34,33 @@ def wait_for(cond, seconds: float = 5.0) -> bool:  # type: ignore[no-untyped-def
     return False
 
 
+def early_disk() -> None:
+    """A disk put in before anything has read the drive is reported, though it isn't a swap."""
+    import floppy_bridge
+    from floppy_drive import TrackDisk
+    from test_drive import FakeUSB, gw_backend
+    usb = FakeUSB(disk=False)
+    usb.latch = True
+    be = gw_backend(usb, proven=True)
+    be.cyls, be.heads, be.track_bytes = 77, 2, 8192
+    slot = floppy_bridge.Slot("FD2", be, TrackDisk(be))
+    slot.reported = floppy_bridge.slot_line(slot)
+    fs = floppy_bridge.BridgeFS({"/FD2.hdm": slot}, b"")
+    said: List[str] = []
+    floppy_bridge.status = said.append                 # type: ignore[assignment]
+    fs._refresh(slot, force=True)
+    check(said == [], "an empty drive stays quiet")
+    usb.disk = True
+    be._empty_seen = 0.0                               # past the wait between steps
+    fs._refresh(slot, force=True)
+    check(said == ["slot FD2 disk=1 protected=0 proven=1"], "a disk put in before the first read is reported")
+    check(slot.generation == 1, "and doesn't count as a swap")
+    fs._refresh(slot, force=True)
+    check(len(said) == 1, "once")
+
+
 def main() -> int:
+    early_disk()
     d = tempfile.mkdtemp(prefix="bridgetest")
     m = os.path.join(d, "m")
     a, b = os.path.join(d, "a.hdm"), os.path.join(d, "b.hdm")
@@ -67,7 +94,7 @@ def main() -> int:
         check(wait_for(lambda: open(a, "rb").read()[40 * 1024:41 * 1024] == new), "write reaches the disk")
         cur = open(a, "rb").read()
         check(cur[:40 * 1024] == da[:40 * 1024] and cur[41 * 1024:] == da[41 * 1024:], "nothing else changed")
-        with open(fd1, "rb") as f:
+        with open(fd1, "rb", buffering=0) as f:
             f.seek(40 * 1024)
             check(f.read(1024) == new, "the write reads back through the bridge")
 
@@ -122,6 +149,15 @@ def main() -> int:
                 check(False, "a write changing the disk's name is refused")
             except OSError:
                 check(True, "a write changing the disk's name is refused")
+
+        # with nothing reading, a disk leaving and coming back is still seen
+        def seen(text: str, times: int = 1) -> bool:
+            log.flush()
+            return open(log.name).read().count(text) >= times
+        os.rename(b, b + ".out")
+        check(wait_for(lambda: seen("slot FD2 disk=0"), 8), "a disk taken out is seen with nothing reading")
+        os.rename(b + ".out", b)
+        check(wait_for(lambda: seen("slot FD2 disk=1", 2), 8), "and so is one put back")
 
         # unmounting saves what is still waiting
         with open(fd2, "r+b", buffering=0) as f:

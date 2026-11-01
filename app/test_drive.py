@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
+
+from greaseweazle.usb import Ack, CmdError
 
 import floppy_drive
 from floppy_drive import DiskError, GwBackend, ImageBackend, TrackDisk, is_standard
@@ -80,12 +83,24 @@ class FakeUSB:
         self.disk = disk
         self.latch = False
         self.fail_seek = False
+        self.motor = False
+        self.home = False
+        self.steps = 0
+        self.old_firmware = False
 
     def get_pin(self, n: int) -> bool:
+        if n == 26:
+            return not self.home
         return not self.latch if n == 34 else True
+
+    def _send_cmd(self, cmd: bytes) -> None:
+        if self.old_firmware:
+            raise CmdError(cmd, Ack.BadCommand)
+        self.latch = not self.disk             # a step the drive ignores: nothing moved
 
     def seek(self, cyl: int, head: int) -> None:
         self.latch = not self.disk             # the step clears it, whatever happens next
+        self.steps += 1
         if self.fail_seek:
             raise OSError("USB went away")
 
@@ -97,6 +112,9 @@ class FakeUSB:
 
     def drive_deselect(self) -> None:
         pass
+
+    def drive_motor(self, unit: int, on: bool) -> None:
+        self.motor = on
 
 
 def gw_backend(usb: FakeUSB, proven: bool, used: bool = False) -> GwBackend:
@@ -115,7 +133,8 @@ def gw_backend(usb: FakeUSB, proven: bool, used: bool = False) -> GwBackend:
     be = GwBackend.__new__(GwBackend)
     fields: Dict[str, Any] = dict(_board=Board, _usb=usb, _lock=Board.lock, _drive=Unit, _cyl_offset=0, _active=False,
                                   _last_use=1.0 if used else 0.0, _ticks_per_rev=0.0, _changed=False,
-                                  _new_change=False, _empty=False, _empty_seen=0.0, proven=proven, _pins=True)
+                                  _new_change=False, _empty=False, _empty_seen=0.0, proven=proven, _pins=True,
+                                  _quiet_step=True)
     be.__dict__.update(fields)
     return be
 
@@ -318,6 +337,104 @@ def main() -> int:
     plain.raw.sectors.pop()
     r.dam.mark = Mark.DDAM
     check(not is_standard(plain), "a deleted-data mark is not standard")
+
+    # 14. Enough failed reads and the disk is left alone until it's changed.
+    floppy_drive.RETRY_SECONDS = 0.0
+    d = FakeDrive()
+    d.unreadable.add((1, 0))
+    disk = TrackDisk(d)
+    good = disk.read_at(0, 16)
+
+    def bad_read() -> str:
+        try:
+            disk.read_at(2 * 1024, 16)
+            return ""
+        except DiskError as e:
+            return str(e.strerror)
+    for _ in range(7):
+        bad_read()
+    check(not disk.left_alone, "seven failed reads are still tolerated")
+    before = d.reads
+    bad_read()
+    check(disk.left_alone and d.reads == before + 1, "the eighth leaves the disk alone")
+    check("Clean the heads" in bad_read() and d.reads == before + 1, "no more reads after that, and it says why")
+    check(disk.read_at(0, 16) == good, "what's in memory still reads")
+    try:
+        disk.write_at(0, b"x" * 16)
+        check(False, "no writes either")
+    except DiskError:
+        check(True, "no writes either")
+    disk.new_disk()
+    d.unreadable.clear()
+    check(not disk.left_alone and not disk.broken and disk.read_at(2 * 1024, 4) == d.data[(1, 0)][:4],
+          "the disk coming out clears it")
+
+    # 15. A protection check's one bad track, now and then, never adds up.
+    limit = floppy_drive.GIVE_UP_SECONDS
+    floppy_drive.GIVE_UP_SECONDS = 0.0
+    d = FakeDrive()
+    d.unreadable.add((1, 0))
+    disk = TrackDisk(d)
+    for _ in range(20):
+        bad_read()
+    check(not disk.left_alone, "failures spread out over time don't add up")
+    floppy_drive.GIVE_UP_SECONDS = limit
+
+    # 16. Backups keep the head still: no re-seat on their two tries.
+    class Flux:
+        _ticks_per_rev = 0.0
+
+    class Undecodable:
+        def nr_missing(self) -> int:
+            return 1
+
+        def decode_flux(self, flux: Any, pll: Any) -> None:
+            pass
+
+    class Fmt:
+        def decode_flux(self, cyl: int, head: int, flux: Any) -> Any:
+            return Undecodable()
+
+    def tries(attempts: int) -> int:
+        usb = FakeUSB(disk=True)
+        seeks: List[int] = []
+        usb.seek = lambda cyl, head: seeks.append(cyl)      # type: ignore[method-assign]
+        usb.read_track = lambda revs=2, ticks=0: Flux()     # type: ignore[attr-defined]
+        be = gw_backend(usb, proven=True)
+        be.__dict__.update(_ticks_per_rev=1.0, _active=True, _disk=Fmt(), _plls=[], READ_ATTEMPTS=attempts)
+        check(be.read_track(40, 0) is None, f"{attempts} tries on a bad track give up")
+        return len(seeks)
+    check(tries(2) == 1, "a backup doesn't move the head on a bad track")
+    check(tries(4) == 3, "playing re-seats it once")
+
+    # 17. The motor stops soon after the last read.
+    usb = FakeUSB(disk=True)
+    usb.motor = True
+    be = gw_backend(usb, proven=True)
+    be.__dict__.update(_active=True, _last_use=time.monotonic())
+    be.idle()
+    check(usb.motor, "the motor runs on just after a read")
+    be._last_use = time.monotonic() - 1.8
+    be.idle()
+    check(not usb.motor and not be._active, "and stops within two seconds")
+
+    # 18. At track 0, finding out whether a disk is in moves nothing.
+    usb = FakeUSB(disk=False)
+    usb.home = usb.latch = True
+    be = gw_backend(usb, proven=True)
+    check(not be.has_disk() and usb.steps == 0, "an empty drive is found empty with the head still")
+    usb.disk = True
+    be._empty_seen = 0.0
+    check(be.has_disk() and usb.steps == 0, "and a disk going in is found the same way")
+    usb = FakeUSB(disk=False)
+    usb.latch = True
+    be = gw_backend(usb, proven=True)
+    be.has_disk()
+    check(usb.steps == 2, "away from track 0 it takes a real step")
+    usb = FakeUSB(disk=True)
+    usb.home = usb.latch = usb.old_firmware = True
+    be = gw_backend(usb, proven=True)
+    check(be.has_disk() and usb.steps == 2 and not be._quiet_step, "older firmware falls back to a real step")
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     return 1 if fails else 0

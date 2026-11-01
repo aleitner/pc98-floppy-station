@@ -14,6 +14,7 @@ Greaseweazle library; ImageBackend uses an image file and exists for testing.
 from __future__ import annotations
 
 import os
+import struct
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
@@ -24,6 +25,7 @@ class DiskError(OSError):
 
 
 RETRY_SECONDS = 30.0                      # how soon a track that wouldn't read is tried again
+GIVE_UP_READS, GIVE_UP_SECONDS = 8, 600.0  # this many failed reads this quickly: stop touching the disk
 LABEL_START, LABEL_END = 3, 11            # where a boot sector holds the disk's name
 
 
@@ -182,7 +184,7 @@ class GwBackend:
     again after IDLE_SECONDS without activity (idle() is called by a timer).
     Pass a shared GwBoard to run two drives from one board.
     """
-    IDLE_SECONDS = 3.0
+    IDLE_SECONDS = 1.7       # about 10 turns: the heads ride a spinning disk the whole time
     READ_ATTEMPTS = 4
     WRITE_ATTEMPTS = 3
 
@@ -218,6 +220,7 @@ class GwBackend:
         self._empty_seen = 0.0
         self.proven = proven         # pin 34 has been seen low: a swap on this drive will be noticed
         self._odd: Set[Tuple[int, int]] = set()   # tracks a write would rebuild into something else
+        self._quiet_step = True
         self._pins = self._pins_supported()
 
     def _pins_supported(self) -> bool:
@@ -276,14 +279,28 @@ class GwBackend:
             if self._last_use:           # first: the steps clear the latch and may then fail
                 self._changed = self._new_change = True
             was_empty = self._empty
-            self._usb.seek(1, 0)
-            self._usb.seek(0, 0)
+            self._clear_latch()
             self._empty = not self._usb.get_pin(34)
             self._empty_seen = time.monotonic()
             if was_empty and self._empty:
                 self._changed, self._new_change = before
         else:
             self._empty = False
+
+    def _clear_latch(self) -> None:
+        """Any step clears the latch if a disk is in. At track 0 the drive ignores a step outward,
+        so the head stays put; an empty drive is always there, and never moves."""
+        from greaseweazle.usb import Ack, Cmd, CmdError
+        if self._quiet_step and not self._usb.get_pin(26):
+            try:
+                self._usb._send_cmd(struct.pack("2B", Cmd.NoClickStep, 2))
+                return
+            except CmdError as e:
+                if e.code != Ack.BadCommand:
+                    raise
+                self._quiet_step = False         # older firmware
+        self._usb.seek(1, 0)
+        self._usb.seek(0, 0)
 
     def idle(self) -> None:
         with self._lock:
@@ -363,7 +380,7 @@ class GwBackend:
                     else:
                         self._odd.add((cyl, head))
                     return bytes(dat.get_img_track())
-                if attempt == self.READ_ATTEMPTS - 2:   # re-seat the head before the last try
+                if 0 < attempt == self.READ_ATTEMPTS - 2:   # re-seat the head before the last try
                     self._check_change()                # these seeks would clear the latch
                     if self._changed:
                         return None
@@ -456,18 +473,23 @@ class TrackDisk:
         self.verified = False                 # track 0 of this disk has decoded on this drive
         self._failed: Dict[int, float] = {}   # tracks that wouldn't read, and when they last failed
         self._odd: Set[int] = set()           # tracks a write would rebuild into something else
+        self._failures: List[float] = []      # when reads failed lately
+        self.left_alone = False               # too many failed: no more reads until the disk comes out
 
     # tracks ---------------------------------------------------------------
     def _track(self, idx: int) -> bytearray:
         t = self._cache.get(idx)
         if t is None:
             cyl, head = divmod(idx, self.b.heads)
+            if self.left_alone:
+                raise DiskError(5, str(self.broken))
             # A game or BIOS can retry a bad spot forever, with the head on it each time.
             if time.monotonic() - self._failed.get(idx, -RETRY_SECONDS) < RETRY_SECONDS:
                 raise DiskError(5, f"can't read track {cyl}.{head}")
             data = self.b.read_track(cyl, head)
             if data is None:
                 self._failed[idx] = time.monotonic()
+                self._note_failure()
                 raise DiskError(5, f"can't read track {cyl}.{head}")
             if not self.b.standard_track(cyl, head):
                 self._odd.add(idx)
@@ -476,6 +498,16 @@ class TrackDisk:
             if idx == 0:
                 self.verified = True
         return t
+
+    def _note_failure(self) -> None:
+        """Failed reads mean dirt on the heads or a failing disk, where every turn can do harm.
+        A protection check's one bad track, read now and then, never adds up to this."""
+        now = time.monotonic()
+        self._failures = [t for t in self._failures if now - t < GIVE_UP_SECONDS] + [now]
+        if len(self._failures) >= GIVE_UP_READS:
+            self.left_alone = True
+            self.broken = ("too many tracks won't read, so this disk is being left alone. Clean the "
+                           "heads, look the disk over, then take it out and put it back")
 
     def read_at(self, offset: int, size: int) -> bytes:
         """`size` bytes from `offset`, reading tracks from the disk as needed."""
@@ -587,6 +619,8 @@ class TrackDisk:
             self._dirty.clear()
             self._failed.clear()
             self._odd.clear()
+            self._failures.clear()
+            self.left_alone = False
             self.broken = None
             self.verified = False
             return lost

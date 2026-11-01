@@ -38,6 +38,7 @@ from floppy_drive import Backend, DiskError, GwBackend, GwBoard, ImageBackend, T
 
 QUIET_SECONDS = 1.0       # the game has stopped writing: put it on the disk
 POLL_SECONDS = 0.5        # how often to look for a swap while the game is reading
+LOOK_SECONDS = 5.0        # and when nothing is: this only reads signals, and moves no head
 FLUSH_TICK = 0.25
 T = TypeVar("T")
 
@@ -59,6 +60,7 @@ class Slot:
     changed_at: float = field(default_factory=time.time)
     polled: float = 0.0
     generation: int = 1                       # which disk this is; a file opened on an older one can't write
+    reported: str = ""                        # the slot line a controlling program last saw
 
 
 class BridgeFS(mfusepy.Operations):
@@ -111,10 +113,12 @@ class BridgeFS(mfusepy.Operations):
         slot.protected = slot.backend.write_protected()   # pin 28 can settle after the swap
         if changed:
             status(f"{slot.name}: disk changed ({disk_state(slot)})")
-            status(slot_line(slot))
         elif slot.protected != was:
             status(f"{slot.name}: now {disk_state(slot)}")
-            status(slot_line(slot))
+        line = slot_line(slot)
+        if changed or line != slot.reported:  # a disk put in before the first read isn't a change
+            slot.reported = line
+            status(line)
 
     # -- writing back --------------------------------------------------------
     def _flush_loop(self) -> None:
@@ -124,6 +128,8 @@ class BridgeFS(mfusepy.Operations):
                     self.flush_now(slot)
                 with self._oplock:
                     try:
+                        if time.monotonic() - slot.polled > LOOK_SECONDS:
+                            self._refresh(slot)
                         slot.backend.idle()
                     except Exception as e:
                         status(f"error {slot.name}: {e}")
@@ -349,7 +355,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             state = "no disk" if not backend.has_disk() else \
                 "write-protected" if slot.protected else "writable"
             status(f"{name}{ext} is {where} ({state})")
-            status(slot_line(slot))
+            slot.reported = slot_line(slot)
+            status(slot.reported)
     except Exception as e:
         traceback.print_exc(file=sys.stdout)    # the window keeps these lines in its log file
         status(f"error can't open the drives: {plain_words(e)}")

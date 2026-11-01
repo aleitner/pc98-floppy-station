@@ -93,6 +93,8 @@ A drive whose track 0 has drifted (below) gets its steps there too: `"offsets": 
 - Changes that haven't reached the disk yet are never written to a disk swapped in underneath them.
   A file opened before a swap can't write afterwards, and a write that would change the disk's
   own name in its boot sector is refused, along with everything after it, until the next swap.
+- Eight failed reads within ten minutes point at dirty heads or a failing disk, so that disk is
+  left alone, no more reads or writes, until it's taken out and put back.
 - A drive stays read-only until it has been seen empty once, which proves it can report a swap.
   With the bridge on its own, name proven drives with `--proven AB`.
 - A write rebuilds a whole track, so a track holding more than plain sectors, usually copy
