@@ -11,10 +11,11 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from greaseweazle import error
 from greaseweazle.usb import Ack, CmdError
 
 import floppy_drive
-from floppy_drive import DiskError, GwBackend, ImageBackend, TrackDisk, is_standard
+from floppy_drive import DiskError, GwBackend, GwBoard, ImageBackend, TrackDisk, is_standard
 
 fails = 0
 
@@ -87,6 +88,8 @@ class FakeUSB:
         self.home = False
         self.steps = 0
         self.old_firmware = False
+        self.lost = False
+        self.resets = 0
 
     def get_pin(self, n: int) -> bool:
         if n == 26:
@@ -98,7 +101,13 @@ class FakeUSB:
             raise CmdError(cmd, Ack.BadCommand)
         self.latch = not self.disk             # a step the drive ignores: nothing moved
 
+    def power_on_reset(self) -> None:
+        self.resets += 1
+        self.lost = self.motor = False
+
     def seek(self, cyl: int, head: int) -> None:
+        if self.lost:
+            raise error.Fatal("Track0 signal absent after seek to cylinder 0")
         self.latch = not self.disk             # the step clears it, whatever happens next
         self.steps += 1
         if self.fail_seek:
@@ -122,6 +131,8 @@ def gw_backend(usb: FakeUSB, proven: bool, used: bool = False) -> GwBackend:
     class Board:
         selected = None
         lock = threading.RLock()
+        backends: List[GwBackend] = []
+        rehome: Any = classmethod(GwBoard.rehome)       # type: ignore[arg-type]
 
     class Bus:
         value = 1
@@ -130,7 +141,9 @@ def gw_backend(usb: FakeUSB, proven: bool, used: bool = False) -> GwBackend:
         unit_id = 0
         bus = Bus
 
+    Board.usb = usb                                    # type: ignore[attr-defined]
     be = GwBackend.__new__(GwBackend)
+    Board.backends.append(be)
     fields: Dict[str, Any] = dict(_board=Board, _usb=usb, _lock=Board.lock, _drive=Unit, _cyl_offset=0, _active=False,
                                   _last_use=1.0 if used else 0.0, _ticks_per_rev=0.0, _changed=False,
                                   _new_change=False, _empty=False, _empty_seen=0.0, proven=proven, _pins=True,
@@ -435,6 +448,86 @@ def main() -> int:
     usb.home = usb.latch = usb.old_firmware = True
     be = gw_backend(usb, proven=True)
     check(be.has_disk() and usb.steps == 2 and not be._quiet_step, "older firmware falls back to a real step")
+
+    # 19. A head off track 0 is sent home, and the read carries on.
+    usb = FakeUSB(disk=True)
+    usb.motor = True
+    be = gw_backend(usb, proven=True)
+    be.__dict__.update(_active=True, _ticks_per_rev=1.0)
+    usb.lost = True
+    be._seek(0, 0)
+    check(usb.resets == 1 and usb.steps == 1, "a head that lost its place is sent home and the seek goes on")
+    check(usb.motor and be._active, "and the motor is running again")
+    usb.lost = True
+    usb.power_on_reset = lambda: None                  # type: ignore[method-assign]
+    try:
+        be._seek(0, 0)
+        check(False, "a head that won't go home is an error, not a retry forever")
+    except error.Fatal:
+        check(True, "a head that won't go home is an error, not a retry forever")
+
+    # 20. A write looks at the headers first: a head off its place writes nothing astray.
+    from greaseweazle import track as gwtrack
+    blank = bytes(len(made.get_img_track()))
+
+    class Shelf(FakeUSB):
+        """Real tracks under the head: a seek lands `slip` tracks off what the board thinks.
+        Going home stops at track 0 for a head too far out, and fails for one too far in."""
+        def __init__(self, slip: int, stuck: bool = False) -> None:
+            super().__init__(disk=True)
+            self.slip, self.stuck, self.pos = slip, stuck, 0
+            self.wrote: List[int] = []
+
+        def power_on_reset(self) -> None:
+            super().power_on_reset()
+            self.slip = self.slip if self.stuck else 0
+
+        def seek(self, cyl: int, head: int) -> None:
+            if cyl == 0 and not self.stuck:
+                if self.slip > 0:
+                    self.lost = True             # it never reaches the track 0 sensor
+                else:
+                    self.slip = 0                # steps out past track 0 are ignored
+            super().seek(cyl, head)
+            self.pos = cyl + self.slip
+
+        def read_track(self, revs: int = 2, ticks: int = 0) -> Any:
+            t = disk_def.mk_track(self.pos, 0)
+            assert t is not None
+            t.set_img_track(blank)
+            return t.master_track().flux()
+
+        def write_track(self, **kw: Any) -> None:
+            self.wrote.append(self.pos)
+
+    def write(usb: Shelf) -> str:
+        be = gw_backend(usb, proven=True)
+        flux = usb.read_track()
+        be.__dict__.update(_active=True, _disk=disk_def, _plls=gwtrack.plls, _ticks_per_rev=float(flux.ticks_per_rev))
+        try:
+            return "written" if be.write_track(40, 0, blank) else "not written"
+        except DiskError as e:
+            return str(e.strerror)
+    usb = Shelf(0)
+    check(write(usb) == "written" and usb.wrote == [40] and usb.resets == 0, "a head in place writes, with no going home")
+    usb = Shelf(1)
+    check(write(usb) == "written" and usb.wrote == [40] and usb.resets == 1, "a head one track in goes home, then writes the right track")
+    usb = Shelf(-1)
+    check(write(usb) == "written" and usb.wrote == [40], "a head one track out goes home, then writes the right track")
+    usb = Shelf(2, stuck=True)
+    check("nothing was written" in write(usb) and usb.wrote == [], "a head that stays off writes nothing")
+    d = FakeDrive()
+    disk = TrackDisk(d)
+    disk.write_at(3 * 1024, b"x" * 16)
+
+    def off_track(cyl: int, head: int, data: bytes) -> bool:
+        raise DiskError(11, f"the head isn't over track {cyl}.{head}")
+    d.write_track = off_track  # type: ignore[method-assign]
+    try:
+        disk.flush_to_disk()
+    except DiskError:
+        pass
+    check(disk.dirty_tracks == 1 and not disk.broken, "and the save waits for the next try, the disk not given up on")
 
     print("ALL PASS" if not fails else f"{fails} FAILED")
     return 1 if fails else 0

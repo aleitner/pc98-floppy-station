@@ -80,6 +80,19 @@ def label_read_once(d: str) -> None:
 
 def main() -> int:
     label_read_once(tempfile.mkdtemp(prefix="stationlabel"))
+    import station
+    base = tempfile.mkdtemp(prefix="stationra")
+    open(os.path.join(base, "np2kai_libretro.so"), "w").close()
+    open(os.path.join(base, "np2kai_libretro.dll"), "w").close()
+    open(os.path.join(base, "np2kai_libretro.dylib"), "w").close()
+    station.find_retroarch = lambda: station.RetroArch(["retroarch"], base, base)
+    cmd = station.emulator_command(station.Config.load())
+    assert isinstance(cmd, list)
+    extra = next((c.split("=", 1)[1] for c in cmd if c.startswith("--appendconfig=")), "")
+    check(cmd[-1].endswith("play.cmd") and os.path.isfile(extra), "RetroArch starts with this launch's own settings")
+    check('input_auto_game_focus = "1"' in open(extra).read() and "config_save_on_exit" in open(extra).read(),
+          "the keyboard goes to the game, and the user's own settings stay as they are")
+    shutil.rmtree(base, ignore_errors=True)
     d = tempfile.mkdtemp(prefix="stationtest")
     lib = os.path.join(d, "library")
     os.makedirs(lib)

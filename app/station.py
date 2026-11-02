@@ -480,7 +480,20 @@ def emulator_command(cfg: Config) -> Union[List[str], str, None]:
     found = find_retroarch()
     if not found or not os.path.isfile(found.core):
         return None
-    return found.cmd + ["-L", found.core, play]
+    return found.cmd + ["-L", found.core, f"--appendconfig={play_settings()}", play]
+
+
+def play_settings() -> str:
+    """For this launch only. PC-98 games need the keys RetroArch's shortcuts sit on (Xak II saves
+    with F5, and Esc would quit), and not every keyboard has Scroll Lock to hand them over."""
+    path = os.path.join(config_dir(), "retroarch-play.cfg")
+    os.makedirs(config_dir(), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('input_auto_game_focus = "1"\n'
+                'input_game_focus_toggle = "f10"\n'
+                'pause_nonactive = "false"\n'         # or a swap made from another window is missed
+                'config_save_on_exit = "false"\n')
+    return path
 
 
 def launch_emulator(cfg: Config) -> str:

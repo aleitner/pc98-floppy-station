@@ -8,8 +8,9 @@ so a game runs from the real disks, with real swaps and real saves.
 
 Use copy disks, not originals. Playing reads a disk over and over.
 
-Status: tested on Linux (SteamOS) and Windows 11, where playing and disk swaps work from the
-real drives but **saving to a real disk hasn't been tested yet**. **Not yet run on macOS.**
+Status: on Linux (SteamOS), playing, saving and loading work from real disks. On Windows 11,
+playing and disk swaps have worked, but **saving to a real disk hasn't been tested yet**.
+**Not yet run on macOS.**
 
 ## Install
 
@@ -74,6 +75,11 @@ game. Wait a couple of seconds after a save before opening a lever: changes reac
 about a second after the game stops writing. If a disk comes out first, those changes are
 dropped, never written to the next disk, and the log says so.
 
+Games started with Play get the whole keyboard, since PC-98 games use keys RetroArch keeps for
+itself: F10 hands it back to RetroArch and F10 again returns it. Without a core that has `-l`,
+reads stop the sound and picture for a moment, and a game waiting for a disk change may need
+the emulator's own menu: F12, FDD, FDD1, Open, `FD1.hdm`.
+
 Stop writes anything unsaved first. Closing the window ends the program a few seconds later;
 the drives are stopped first, with anything pending written. Ctrl-C in a terminal does the
 same, and the window closes by itself.
@@ -88,11 +94,16 @@ A drive whose track 0 has drifted (below) gets its steps there too: `"offsets": 
   a read-only file, so an emulator never tries.
 - The first write to a disk is only accepted after the drive has read that disk's track 0 with
   the headers the decoder expects. A drive whose home position has slipped is refused.
+- Before a track is written, the headers under the head are read, as the PC-98's own controller
+  did before every sector. If they belong to another track, the head is sent home and looked at
+  again; if it's still off, nothing is written and the save waits 30 seconds for another try.
 - Every written track is read back. If it doesn't match, the disk is marked broken and no more
   writes go to it.
 - Changes that haven't reached the disk yet are never written to a disk swapped in underneath them.
-  A file opened before a swap can't write afterwards, and a write that would change the disk's
-  own name in its boot sector is refused, along with everything after it, until the next swap.
+  The file goes away while no disk is in, and for two seconds after a swap, like a drive that
+  isn't ready, so nothing can write in that gap. A file opened before a swap can't write
+  afterwards, and a write that would change the disk's own name in its boot sector is refused,
+  along with everything after it, until the next swap.
 - Eight failed reads within ten minutes point at dirty heads or a failing disk, so that disk is
   left alone, no more reads or writes, until it's taken out and put back.
 - A drive stays read-only until it has been seen empty once, which proves it can report a swap.

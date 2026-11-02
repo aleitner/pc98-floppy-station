@@ -160,6 +160,15 @@ class GwBoard:
         self.usb.power_on_reset()
         self.lock = threading.RLock()
         self.selected: Optional["GwBackend"] = None
+        self.backends: List["GwBackend"] = []
+
+    def rehome(self) -> None:
+        """A head isn't where the board remembers. The reset makes the next seek on each drive
+        find track 0 by its sensor; it also stops the motors, which restart on next use."""
+        for backend in self.backends:
+            backend._active = False
+        self.selected = None
+        self.usb.power_on_reset()
 
     def _unlock(self) -> None:
         if self._lock_fd is not None:
@@ -221,6 +230,7 @@ class GwBackend:
         self.proven = proven         # pin 34 has been seen low: a swap on this drive will be noticed
         self._odd: Set[Tuple[int, int]] = set()   # tracks a write would rebuild into something else
         self._quiet_step = True
+        board.backends.append(self)
         self._pins = self._pins_supported()
 
     def _pins_supported(self) -> bool:
@@ -263,6 +273,7 @@ class GwBackend:
         except Exception:
             self._usb.drive_motor(self._drive.unit_id, False)   # no disk, or no answer: not active
             raise
+        self._usb.drive_motor(self._drive.unit_id, True)        # sending a head home stops it
         self._active = True
 
     def _check_change(self) -> None:
@@ -273,7 +284,7 @@ class GwBackend:
         if not self._usb.get_pin(34):
             self.proven = True
             # a step clears the latch; if it reads low again there is no disk at all
-            if self._empty and time.monotonic() - self._empty_seen < 2.0:
+            if self._empty and time.monotonic() - self._empty_seen < (2.0 if self._quiet_step else 60.0):
                 return                   # known empty: don't step the head on every poll
             before = self._changed, self._new_change
             if self._last_use:           # first: the steps clear the latch and may then fail
@@ -296,11 +307,28 @@ class GwBackend:
                 self._usb._send_cmd(struct.pack("2B", Cmd.NoClickStep, 2))
                 return
             except CmdError as e:
-                if e.code != Ack.BadCommand:
+                if e.code not in (Ack.BadCommand, Ack.BadCylinder):
                     raise
-                self._quiet_step = False         # older firmware
-        self._usb.seek(1, 0)
-        self._usb.seek(0, 0)
+                self._quiet_step = False         # older firmware, or this drive obeyed the step
+        self._seek(1, 0)
+        self._seek(0, 0)
+
+    def _seek(self, cyl: int, head: int) -> None:
+        """A disk going in can knock a head off track 0, and every track after that would be
+        out by as much. The board finds out at track 0: send the head home and carry on. Every
+        write first looks at the headers under the head, so none before can have gone astray."""
+        from greaseweazle import error
+        try:
+            self._usb.seek(cyl, head)
+        except error.Fatal as e:
+            if "Track0" not in str(e):
+                raise
+            spinning = self._active
+            self._board.rehome()
+            self._select()
+            if spinning:
+                self._activate()
+            self._usb.seek(cyl, head)
 
     def idle(self) -> None:
         with self._lock:
@@ -359,11 +387,13 @@ class GwBackend:
             if self._changed:
                 return None              # whatever is in the drive now isn't the disk being read
             self._last_use = time.monotonic()
-            self._usb.seek(cyl + self._cyl_offset, head)
+            self._seek(cyl + self._cyl_offset, head)
+            if self._changed:
+                return None              # seen while sending the head home
             self._ticks_per_rev = self._ticks_per_rev or float(self._usb.read_track(2).ticks_per_rev)
             dat = None
             for attempt in range(self.READ_ATTEMPTS):
-                flux = self._usb.read_track(revs=2 if attempt == 0 else 3)
+                flux = self._usb.read_track(revs=1 if attempt == 0 else 3)
                 flux._ticks_per_rev = self._ticks_per_rev
                 if dat is None:
                     dat = self._disk.decode_flux(cyl, head, flux)
@@ -384,13 +414,27 @@ class GwBackend:
                     self._check_change()                # these seeks would clear the latch
                     if self._changed:
                         return None
-                    self._usb.seek(0, 0)
-                    self._usb.seek(cyl + self._cyl_offset, head)
+                    self._seek(0, 0)
+                    self._seek(cyl + self._cyl_offset, head)
             return None
 
     def standard_track(self, cyl: int, head: int) -> bool:
         """After a read of that track: would rewriting it keep everything on it?"""
         return (cyl, head) not in self._odd
+
+    def _over_track(self, cyl: int, head: int) -> bool:
+        """Is the head over the track about to be rewritten? The PC-98's controller found each
+        sector's header before writing it. A whole-track write has to look first, or a head
+        knocked off its place would write over the track next door."""
+        flux = self._usb.read_track(revs=1)
+        flux._ticks_per_rev = self._ticks_per_rev
+        dat = self._disk.decode_flux(cyl, head, flux)
+        raw = getattr(dat, "raw", None)
+        if raw is None:
+            return False
+        want = {(s.idam.c, s.idam.h) for s in dat.sectors}
+        seen = {(s.idam.c, s.idam.h) for s in raw.sectors if s.idam.crc == 0}
+        return bool(seen) and seen <= want
 
     def write_track(self, cyl: int, head: int, data: bytes) -> bool:
         from greaseweazle.track import MasterTrack
@@ -414,7 +458,16 @@ class GwBackend:
                 v = round(y)
                 rem = y - v
                 flux_list.append(v)
-            self._usb.seek(cyl + self._cyl_offset, head)
+            self._seek(cyl + self._cyl_offset, head)
+            if not self._over_track(cyl, head):
+                self._check_change()             # these seeks would clear the latch
+                if self._changed:
+                    return False
+                self._seek(0, 0)                 # a head that lost its place is sent home
+                self._seek(cyl + self._cyl_offset, head)
+                if not self._over_track(cyl, head):
+                    raise DiskError(11, f"the head isn't over track {cyl}.{head}, even after going "
+                                        "home; nothing was written, and it will try again")
             verify = master.verify
             for attempt in range(self.WRITE_ATTEMPTS):
                 if attempt:

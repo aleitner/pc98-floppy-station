@@ -52,11 +52,31 @@ def early_disk() -> None:
     check(said == [], "an empty drive stays quiet")
     usb.disk = True
     be._empty_seen = 0.0                               # past the wait between steps
+    slot.seen_disk = False
+    slot.present = False
     fs._refresh(slot, force=True)
-    check(said == ["slot FD2 disk=1 protected=0 proven=1"], "a disk put in before the first read is reported")
+    check(slot.away and said == [], "a disk put in keeps the file away for a moment")
+    slot.out_until = 0.0
+    fs._refresh(slot, force=True)
+    check(said == ["slot FD2 disk=1 protected=0 proven=1"], "and is then reported")
     check(slot.generation == 1, "and doesn't count as a swap")
+    check(floppy_bridge.play_line("a b", [slot]) == "np2kai -l a b\n", "a real drive asks for live mode")
     fs._refresh(slot, force=True)
     check(len(said) == 1, "once")
+    slot.live, slot.told, slot.out_until = True, False, 0.0
+    held = slot.generation
+    try:
+        fs.write("/FD2.hdm", b"x", 0, held)
+        check(False, "a game that missed a swap can't write")
+    except Exception:
+        check(True, "a game that missed a swap can't write")
+    slot.out_until = time.monotonic() + 5
+    try:
+        fs.getattr("/FD2.hdm")
+    except Exception:
+        pass
+    check(slot.told, "seeing the file gone counts as being told")
+    slot.out_until = 0.0
 
 
 def main() -> int:
@@ -84,7 +104,7 @@ def main() -> int:
         check(sorted(os.listdir(m)) == ["FD1.hdm", "FD2.hdm", "play.cmd"], "folder lists both drives and play.cmd")
         check(os.path.getsize(fd1) == SIZE, "file has the disk's exact size")
         cmd = open(os.path.join(m, "play.cmd")).read()
-        check(cmd == f"np2kai {fd1} {fd2}\n", "play.cmd names both drives")
+        check(cmd == f"np2kai {fd1} {fd2}\n", "play.cmd names both drives, with no -l for backups")
 
         # reads, sector by sector like an emulator, across a track boundary
         with open(fd1, "rb", buffering=0) as f:
@@ -112,6 +132,12 @@ def main() -> int:
         time.sleep(0.6)
         os.replace(tmp, a)
         time.sleep(0.6)
+        try:
+            open(fd1, "rb")
+            check(False, "the file is away just after a swap")
+        except OSError:
+            check(True, "the file is away just after a swap")
+        time.sleep(2.2)
         check(open(fd1, "rb").read(1024) == swapped[:1024], "swap seen, even though the track was cached")
 
         # a pending write must not land on a disk swapped in underneath it
@@ -121,12 +147,13 @@ def main() -> int:
         third = os.urandom(SIZE)
         open(tmp, "wb").write(third)
         os.replace(tmp, a)
-        time.sleep(2.0)
+        time.sleep(3.0)
         check(open(a, "rb").read() == third, "pending write never reaches the new disk")
         log.flush()
         check("NOT written" in open(log.name).read(), "the lost write is reported")
 
         # a program that held the file open across a swap can't write to the new disk
+        time.sleep(2.2)
         held = open(fd1, "r+b", buffering=0)
         held.seek(40 * 1024)
         held.read(16)
@@ -141,7 +168,7 @@ def main() -> int:
         except OSError:
             check(True, "a file opened before a swap can't write")
         held.close()
-        time.sleep(1.5)
+        time.sleep(2.5)
         check(open(a, "rb").read() == fourth, "the new disk is untouched")
         with open(fd1, "r+b", buffering=0) as f:
             f.seek(40 * 1024)
@@ -164,7 +191,8 @@ def main() -> int:
         os.rename(b, b + ".out")
         check(wait_for(lambda: seen("slot FD2 disk=0"), 8), "a disk taken out is seen with nothing reading")
         os.rename(b + ".out", b)
-        check(wait_for(lambda: seen("slot FD2 disk=1", 2), 8), "and so is one put back")
+        check(wait_for(lambda: seen("slot FD2 disk=1", 2), 10), "and so is one put back")
+        time.sleep(0.5)
 
         # unmounting saves what is still waiting
         with open(fd2, "r+b", buffering=0) as f:
@@ -182,6 +210,23 @@ def main() -> int:
     check(open(b, "rb").read(2048)[1024:] == b"LASTSAVE" * 128, "unmounting saves pending writes")
     log.flush()
     print("".join("  " + line for line in open(log.name) if "error" in line.lower()))
+
+    # a save that finds the head off its track waits for a later try, and isn't tried every tick
+    import floppy_bridge
+    from floppy_drive import DiskError, ImageBackend, TrackDisk
+    img = os.path.join(d, "waits.hdm")
+    open(img, "wb").write(bytes(SIZE))
+    be = ImageBackend(img, 77, 2, 8192)
+
+    def off_track(cyl: int, head: int, data: bytes) -> bool:
+        raise DiskError(11, f"the head isn't over track {cyl}.{head}; nothing was written")
+    be.write_track = off_track                         # type: ignore[method-assign]
+    disk = TrackDisk(be)
+    disk.write_at(8192 * 10, b"y" * 16)
+    slot = floppy_bridge.Slot("FD1", be, disk)
+    fs = floppy_bridge.BridgeFS({"/FD1.hdm": slot}, b"")
+    check(not fs.flush_now(slot) and disk.dirty_tracks == 1 and not disk.broken, "an off-track save is kept for later")
+    check(slot.retry_at - time.monotonic() > floppy_bridge.SAVE_RETRY_SECONDS - 5, "and the next try waits")
     shutil.rmtree(d, ignore_errors=True)
     print("ALL PASS" if not fails else f"{fails} FAILED")
     return 1 if fails else 0

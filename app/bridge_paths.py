@@ -29,7 +29,7 @@ def plain_words(e: BaseException) -> str:
     if "firmware" in text:
         return text
     if "Track0 signal" in text:
-        return "a drive's head lost its place; press Stop, then Start, which sends it home"
+        return "a drive's head lost its place and couldn't be sent home; press Stop, then Start"
     if "Track 0 not found" in text:
         return "a drive didn't respond; check its power cable and the ribbon"
     if "Access is denied" in text:            # Windows, a COM port already open elsewhere
