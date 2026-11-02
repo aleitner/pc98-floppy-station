@@ -39,7 +39,7 @@ from bridge_paths import EXT, cmd_path, default_mountpoint, plain_words, unmount
 SYSTEM = platform.system()
 PORT = int(os.environ.get("PC98_STATION_PORT") or 9801)   # overridable so a test can run beside the real thing
 APP_NAME = "PC-98 Floppy Station"
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 FROZEN = getattr(sys, "frozen", False)
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 STATIC = os.path.realpath(os.path.join(HERE, "static"))
