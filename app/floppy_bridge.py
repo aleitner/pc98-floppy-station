@@ -1,14 +1,15 @@
 """Show the real floppy drives as disk-image files, so an emulator plays straight from them.
 
-  floppy_bridge.py                          left drive = FD1.hdm, right drive = FD2.hdm
+  floppy_bridge.py                          left drive = FD1.d88, right drive = FD2.d88
   floppy_bridge.py --fd1 A --fd2 none       one drive only
   floppy_bridge.py --offset B=4             drive B's real track 0 is 4 steps in
-  floppy_bridge.py --image FD1=a.hdm --image FD2=b.hdm --mountpoint /tmp/m     (testing)
+  floppy_bridge.py --image FD1=a.hdm --image FD2=b.d88 --mountpoint /tmp/m     (a backup for a drive)
 
 The files appear in a folder (a drive letter on Windows) along with play.cmd, which
-loads both drives in RetroArch's Neko Project II kai core. Every read goes to the disk
-a track at a time; every write is put on the disk about a second after the game stops
-writing, and verified. Swap a disk by opening the lever and changing it: the bridge sees
+loads both drives in RetroArch's Neko Project II kai core. The files are D88 images, which
+keep each sector's ID and read status, so copy protection on a disk reaches the game. Every
+read goes to the disk a track at a time; every write is put on the disk about a second
+after the game stops writing, and verified. Swap a disk by opening the lever and changing it: the bridge sees
 the change and drops what it remembers of the old disk.
 
 Use copy disks, not originals. Playing reads the disk over and over, and a weak track
@@ -33,8 +34,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
 
 import mfusepy
 
-from bridge_paths import EXT, GEOMETRY, SYSTEM, cmd_path, default_mountpoint, plain_words, unmount
-from floppy_drive import Backend, DiskError, GwBackend, GwBoard, ImageBackend, TrackDisk
+import d88
+from bridge_paths import DRIVE_EXT, GEOMETRY, SYSTEM, cmd_path, default_mountpoint, plain_words, unmount
+from floppy_drive import Backend, D88Backend, DiskError, GwBackend, GwBoard, ImageBackend, TrackDisk
 
 QUIET_SECONDS = 1.0       # the game has stopped writing: put it on the disk
 POLL_SECONDS = 0.5        # how often to look for a swap while the game is reading
@@ -58,6 +60,7 @@ class Slot:
     name: str
     backend: Backend
     disk: TrackDisk
+    media: int = d88.MEDIA["pc98.2hd"]
     protected: bool = False
     changed_at: float = field(default_factory=time.time)
     polled: float = 0.0
@@ -69,6 +72,10 @@ class Slot:
     live: bool = False                        # the emulator is told of swaps through the file
     told: bool = True                         # and it has seen the file gone since the last one
     retry_at: float = 0.0                     # a save left waiting isn't tried again before then
+    read_since: bool = True                   # the emulator has read this disk since it went in
+
+    def __post_init__(self) -> None:
+        self.view = d88.View(self.disk, self.name, self.media, lambda: self.protected)
 
     @property
     def away(self) -> bool:
@@ -84,7 +91,7 @@ class BridgeFS(mfusepy.Operations):
     use_ns = True
 
     def __init__(self, slots: Dict[str, Slot], play_cmd: bytes) -> None:
-        self.slots = slots                    # keyed by "/FD1.hdm"
+        self.slots = slots                    # keyed by "/FD1.d88"
         self.play_cmd = play_cmd
         self._oplock = threading.RLock()      # one drive operation at a time: there's one board
         self.uid = getattr(os, "getuid", lambda: 0)()
@@ -92,6 +99,7 @@ class BridgeFS(mfusepy.Operations):
         self.started = time.time()
         self.stop = threading.Event()
         self.quit = threading.Event()         # set by the controller; acted on inside a FUSE call
+        self.window_pid = 0                   # the controlling window, whose reads aren't the emulator's
         self.flusher = threading.Thread(target=self._flush_loop, daemon=True)
 
     # -- errors: a failed drive operation must never take the mount down ----
@@ -126,6 +134,7 @@ class BridgeFS(mfusepy.Operations):
                        "they were NOT written to the new disk")
             slot.changed_at = time.time()
             slot.generation += 1
+            slot.read_since = False
         was = slot.protected
         slot.protected = slot.backend.write_protected()   # pin 28 can settle after the swap
         present = slot.backend.has_disk()
@@ -215,7 +224,7 @@ class BridgeFS(mfusepy.Operations):
             slot.told = True
             raise mfusepy.FuseOSError(errno.ENOENT)
         mode = 0o444 if slot.protected else 0o644     # how an emulator learns of the write notch
-        return dict(base, st_mode=stat.S_IFREG | mode, st_nlink=1, st_size=slot.disk.size,
+        return dict(base, st_mode=stat.S_IFREG | mode, st_nlink=1, st_size=slot.view.size,
                     st_mtime=int(slot.changed_at * 1e9))
 
     def readdir(self, path: str, fh: int) -> List[str]:
@@ -237,7 +246,18 @@ class BridgeFS(mfusepy.Operations):
             return self.play_cmd[offset:offset + size]
         slot = self._slot(path)
 
-        return self._run(slot, lambda: slot.disk.read_at(offset, size))
+        def go() -> bytes:
+            if not slot.present:
+                # An empty drive at start keeps its file; reading it is a drive that isn't
+                # ready. The emulator asks again and again, so this touches nothing and says nothing.
+                if offset >= d88.HEADER:
+                    raise mfusepy.FuseOSError(errno.EIO)
+                return slot.view.read_at(offset, min(size, d88.HEADER - offset))
+            data = slot.view.read_at(offset, size)
+            if fh == slot.generation and not from_window(self.window_pid):
+                slot.read_since = True
+            return data
+        return self._run(slot, go)
 
     def write(self, path: str, data: bytes, offset: int, fh: int) -> int:
         slot = self._slot(path)
@@ -252,7 +272,12 @@ class BridgeFS(mfusepy.Operations):
             if fh != slot.generation or slot.away:   # opened before a swap: it means the old disk
                 status(f"error {slot.name}: a write for the disk taken out was refused")
                 raise mfusepy.FuseOSError(errno.EIO)
-            return slot.disk.write_at(offset, data)
+            if not slot.read_since:
+                # A game reads a disk before saving to it. A write first thing after a swap is
+                # an emulator putting back a track it kept from the old disk, on ejecting it.
+                status(f"error {slot.name}: a write for the disk taken out was refused")
+                raise mfusepy.FuseOSError(errno.EIO)
+            return slot.view.write_at(offset, data)
         return self._run(slot, go)
 
     def fsync(self, path: str, datasync: int, fh: int) -> int:
@@ -282,6 +307,17 @@ class BridgeFS(mfusepy.Operations):
 
     def release(self, path: str, fh: int) -> int:
         return 0
+
+
+def from_window(pid: int) -> bool:
+    """Is this FUSE call from the window running the bridge? It reads a disk to show its name,
+    which says nothing about whether the emulator has seen the disk."""
+    if not pid:
+        return False
+    try:
+        return int(mfusepy.fuse_get_context()[2]) == pid
+    except Exception:
+        return False
 
 
 def play_line(names: str, slots: Iterable[Slot]) -> str:
@@ -349,6 +385,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="an image file standing in for that drive")
     ap.add_argument("--proven", default="", metavar="AB",
                     help="drives known to report a swap; any other is read-only until seen empty")
+    ap.add_argument("--window-pid", type=int, default=0, metavar="PID",
+                    help="the controlling window's process, which reads disks only to show their names")
     ap.add_argument("--control-stdin", action="store_true",
                     help="stop when 'stop' arrives on stdin or stdin closes (for a controlling program)")
     args = ap.parse_args(argv)
@@ -372,7 +410,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             status(f"error {mountpoint} isn't empty; is the bridge already running?")
             return 2
 
-    ext = EXT[args.format]
     images = dict(i.split("=", 1) for i in args.image)
     wanted = {"FD1": args.fd1.upper(), "FD2": args.fd2.upper()}
     board: Optional[GwBoard] = None
@@ -380,26 +417,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         # Each slot is a drive or an image file; they can be mixed.
         cyls, heads, tb = GEOMETRY[args.format]
+        n = d88.SIZE_CODE[args.format]
         offsets = {d.upper(): int(n) for d, n in (o.split("=", 1) for o in args.offset)}
         backends: Dict[str, Backend] = {}
         for name in ("FD1", "FD2"):
             if name in images:
-                backends[name] = ImageBackend(images[name], cyls, heads, tb)
+                image = D88Backend if images[name].lower().endswith(".d88") else ImageBackend
+                backends[name] = image(images[name], cyls, heads, tb, n)
             elif wanted[name] != "NONE":
                 if board is None:
                     board = GwBoard()
                 backends[name] = GwBackend(wanted[name], args.format, board, offsets.get(wanted[name], 0),
                                            wanted[name] in args.proven.upper())
         for name, backend in backends.items():
-            slot = Slot(name, backend, TrackDisk(backend, log=slot_logger(name)))
+            slot = Slot(name, backend, TrackDisk(backend, log=slot_logger(name)), d88.MEDIA[args.format])
             slot.protected = backend.write_protected()
             slot.present = slot.seen_disk = backend.has_disk()
             slot.live = isinstance(backend, GwBackend)
-            slots[f"/{name}{ext}"] = slot
+            slots[f"/{name}{DRIVE_EXT}"] = slot
             where = images.get(name) or f"drive {wanted[name]}"
             state = "no disk" if not backend.has_disk() else \
                 "write-protected" if slot.protected else "writable"
-            status(f"{name}{ext} is {where} ({state})")
+            status(f"{name}{DRIVE_EXT} is {where} ({state})")
             slot.reported = slot_line(slot)
             status(slot.reported)
     except Exception as e:
@@ -409,6 +448,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     names = " ".join(cmd_path(mountpoint, p[1:]) for p in slots)
     ops = BridgeFS(slots, play_line(names, slots.values()).encode())
+    ops.window_pid = args.window_pid
     status(f"load {cmd_path(mountpoint, 'play.cmd')} in RetroArch with the Neko Project II kai core")
     if args.control_stdin:
         threading.Thread(target=watch_stdin, args=(ops, mountpoint), daemon=True).start()

@@ -16,6 +16,7 @@ from greaseweazle.usb import Ack, CmdError
 
 import floppy_drive
 from floppy_drive import DiskError, GwBackend, GwBoard, ImageBackend, TrackDisk, is_standard
+from d88 import Sector
 
 fails = 0
 
@@ -28,7 +29,7 @@ def check(ok: bool, what: str) -> None:
 
 class FakeDrive:
     """A two-track-per-cylinder drive whose tracks can be made unreadable or unwritable."""
-    cyls, heads, track_bytes = 4, 2, 1024
+    cyls, heads, track_bytes, sector_n = 4, 2, 1024, 3
 
     def __init__(self) -> None:
         self.data: Dict[Tuple[int, int], bytes] = {(c, h): bytes([c * 2 + h]) * self.track_bytes
@@ -36,6 +37,7 @@ class FakeDrive:
         self.unreadable: set[Tuple[int, int]] = set()
         self.unwritable: set[Tuple[int, int]] = set()
         self.odd: set[Tuple[int, int]] = set()
+        self.extra: Dict[Tuple[int, int], List[Sector]] = {}
         self.changed = False
         self.writes = 0
         self.reads = 0
@@ -48,6 +50,12 @@ class FakeDrive:
 
     def standard_track(self, cyl: int, head: int) -> bool:
         return (cyl, head) not in self.odd
+
+    def sectors(self, cyl: int, head: int) -> Optional[List[Sector]]:
+        return self.extra.get((cyl, head))
+
+    def why_unreadable(self, cyl: int, head: int) -> str:
+        return ""
 
     def write_track(self, cyl: int, head: int, data: bytes) -> bool:
         if (cyl, head) in self.unwritable:
@@ -147,7 +155,8 @@ def gw_backend(usb: FakeUSB, proven: bool, used: bool = False) -> GwBackend:
     fields: Dict[str, Any] = dict(_board=Board, _usb=usb, _lock=Board.lock, _drive=Unit, _cyl_offset=0, _active=False,
                                   _last_use=1.0 if used else 0.0, _ticks_per_rev=0.0, _changed=False,
                                   _new_change=False, _empty=False, _empty_seen=0.0, proven=proven, _pins=True,
-                                  _quiet_step=True)
+                                  _quiet_step=True, _odd=set(), _extra={}, _why={}, sector_n=3,
+                                  track_bytes=8192)
     be.__dict__.update(fields)
     return be
 
@@ -408,6 +417,9 @@ def main() -> int:
         def decode_flux(self, cyl: int, head: int, flux: Any) -> Any:
             return Undecodable()
 
+        def mk_track(self, cyl: int, head: int) -> Any:
+            return None                               # no raw decode: nothing of the track read at all
+
     def tries(attempts: int) -> int:
         usb = FakeUSB(disk=True)
         seeks: List[int] = []
@@ -529,8 +541,158 @@ def main() -> int:
         pass
     check(disk.dirty_tracks == 1 and not disk.broken, "and the save waits for the next try, the disk not given up on")
 
+    d88_tests()
     print("ALL PASS" if not fails else f"{fails} FAILED")
     return 1 if fails else 0
+
+
+def d88_tests() -> None:
+    """The D88 layer: images keep odd sectors, the emulator's search finds every one, a
+    track read from flux keeps what a controller would see, and a drive that is tracks off
+    says so."""
+    import io
+    import os
+    import tempfile
+    import d88
+    # 30. A file round trip keeps every sector, and the layout suits Neko Project II.
+    tracks = [d88.plain_sectors(c, h, bytes([c, h]) * 4096, 3) for c in range(3) for h in range(2)]
+    long_ones = [d88.Sector(1, 0, 0xF0 + k, 4, bytes([k]) * 2048, d88.CRC_ERROR) for k in range(11)]
+    tracks[2] = tracks[2][:4] + long_ones + tracks[2][4:]
+    tracks[3][0] = d88.Sector(1, 1, 1, 3, tracks[3][0].data, 0, True)
+    img = d88.Image.from_bytes(d88.Image("TEST", 0x20, True, tracks).to_bytes())
+    check(img.name == "TEST" and img.protected and img.media == 0x20, "a D88's header round-trips")
+    check([s.id for s in img.tracks[2]] == [s.id for s in tracks[2]], "a protected track keeps its sectors in order")
+    check(img.tracks[3][0].deleted and not d88.is_plain(img.tracks[3], 1, 1, 8192, 3), "a deleted mark is kept")
+    pos, ok = 0, True
+    for sec in img.tracks[2]:
+        ok = ok and pos + 16 + sec.full <= d88.SLOT
+        pos += 16 + len(sec.data)
+    check(ok and all(len(x.data) >= 768 for x in img.tracks[2] if x.status), "long sectors fit the emulator's search")
+    check(d88.is_plain(img.tracks[0], 0, 0, 8192, 3) and not d88.is_plain(img.tracks[2], 1, 0, 8192, 3),
+          "plain and protected tracks are told apart")
+    turned = img.tracks[0][1:] + img.tracks[0][:1]
+    check(d88.is_plain(turned, 0, 0, 8192, 3) and not d88.is_plain(turned + turned[:1], 0, 0, 8192, 3),
+          "a plain track's sectors may come round in any order, but each only once")
+    check(d88.image_of(img.tracks[2], 1, 0, 8192, 3) == bytes([1, 0]) * 4096, "a protected track's plain sectors make its image")
+    raw = d88.Image("TEST", 0x20, False, tracks).to_bytes()
+    check(d88.boot_sector_start(io.BytesIO(raw), True) == bytes([0, 0]) * 8, "a D88's boot sector is found")
+    check(d88.boot_sector_start(io.BytesIO(b"ABCDEFGHIJKLMNOPQ"), False) == b"ABCDEFGHIJKLMNOP", "and a sector image's")
+
+    # 31. A D88 standing in for a drive saves into its plain sectors, in place.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "x.d88")
+        open(path, "wb").write(raw)
+        be = floppy_drive.D88Backend(path, 3, 2, 8192)
+        check(be.standard_track(0, 0) and not be.standard_track(1, 0), "a D88 backend knows its protected track")
+        check(be.sectors(1, 0) is not None and be.sectors(0, 0) is None, "and gives its sectors")
+        new = bytearray(be.read_track(2, 1) or b"")
+        new[1024:1032] = b"SAVEDATA"
+        be.write_track(2, 1, bytes(new))
+        again = d88.Image.from_bytes(open(path, "rb").read())
+        check(again.tracks[5][1].data[:8] == b"SAVEDATA" and len(open(path, "rb").read()) == len(raw),
+              "a save lands in the file in place")
+        disk = TrackDisk(be)
+        check([x.r for x in disk.sectors(2)] == [x.r for x in tracks[2]], "the disk layer serves all its sectors")
+        try:
+            disk.write_at(2 * 8192, b"z" * 8)
+            check(False, "a write to the protected track is refused")
+        except DiskError:
+            check(True, "a write to the protected track is refused")
+
+    # 32. Every sector a controller would find, from one read, plain ones as decoded.
+    from greaseweazle.codec.ibm import ibm
+    import greaseweazle.track
+    def area(start: int, c: int, r: int, n: int, crc: int, mark: int = ibm.Mark.DAM) -> Any:
+        return ibm.Sector(ibm.IDAM(start, start + 10, 0, c=c, h=0, r=r, n=n),
+                          ibm.DAM(start + 20, start + 40, crc, mark=mark, data=bytes([r]) * (128 << n)))
+    areas = [area(900, 1, 0xF5, 4, 1), area(100, 1, 1, 3, 1), area(500, 1, 0xF0, 4, 1), area(510, 1, 0xF0, 4, 1),
+             area(700, 1, 2, 3, 0, ibm.Mark.DDAM)]
+    class Flux:
+        def cue_at_index(self) -> None:
+            pass
+    class Template:
+        mode, time_per_rev, clock = ibm.Mode.MFM, 0.2, 1e-6
+    saved = ibm.IBMTrack.mfm_decode_raw, greaseweazle.track.PLLTrack
+    ibm.IBMTrack.mfm_decode_raw = staticmethod(lambda raw: areas)
+    class NoTurns:
+        revolutions: List[Any] = []
+    greaseweazle.track.PLLTrack = lambda **kw: NoTurns()
+    try:
+        image = bytes([7]) * 2048
+        got = floppy_drive.all_sectors(Template(), Flux(), image, 1, 0, 2048, 3)
+    finally:
+        ibm.IBMTrack.mfm_decode_raw, greaseweazle.track.PLLTrack = saved
+    check([x.r for x in got] == [1, 0xF0, 2, 0xF5], "sectors come in the order the head meets them, each once")
+    check(got[0].data == bytes([7]) * 1024 and got[0].status == 0, "a plain sector keeps what the format's decoder read")
+    check(got[1].status == d88.CRC_ERROR and len(got[1].data) == 2048, "a bad data CRC is kept as its status")
+    check(got[2].deleted, "a deleted data mark is kept")
+
+    # 32b. A sector with the same ID elsewhere on the track is another sector, and is kept.
+    areas[:] = [area(100, 1, 1, 3, 0), area(5000, 1, 0xF0, 4, 1), area(166000 + 5030, 1, 0xF0, 4, 1),
+                area(40000, 1, 0xF0, 4, 0)]
+    class Rev:
+        nr_bits = 166000
+    class OneTurn:
+        revolutions = [Rev()]
+    ibm.IBMTrack.mfm_decode_raw = staticmethod(lambda raw: areas)
+    greaseweazle.track.PLLTrack = lambda **kw: OneTurn()
+    try:
+        got = floppy_drive.all_sectors(Template(), Flux(), None, 1, 0, 2048, 3)
+    finally:
+        ibm.IBMTrack.mfm_decode_raw, greaseweazle.track.PLLTrack = saved
+    check([(x.r, x.status) for x in got] == [(1, 0), (0xF0, d88.CRC_ERROR), (0xF0, 0)],
+          "the same sector on the next turn counts once; one with the same ID elsewhere is kept")
+
+    # 32b2. From a drive: a track whose own sector 5 never reads is served with that error;
+    #       one whose sectors all name another cylinder is the head in the wrong place.
+    class Half:
+        raw = None
+        def nr_missing(self) -> int:
+            return 1
+        def decode_flux(self, flux: Any, pll: Any) -> None:
+            pass
+    class Fmt88:
+        def decode_flux(self, cyl: int, head: int, flux: Any) -> Any:
+            return Half()
+        def mk_track(self, cyl: int, head: int) -> Any:
+            return Template()
+    def from_drive(c: int) -> Tuple[Optional[bytes], GwBackend]:
+        usb = FakeUSB(disk=True)
+        usb.read_track = lambda revs=2, ticks=0: Flux()     # type: ignore[attr-defined]
+        g = gw_backend(usb, proven=True)
+        g.__dict__.update(_ticks_per_rev=1.0, _active=True, _disk=Fmt88(), _plls=[], READ_ATTEMPTS=2)
+        areas[:] = [area(1000 * r, c, r, 3, 1 if r == 5 else 0) for r in range(1, 9)]
+        ibm.IBMTrack.mfm_decode_raw = staticmethod(lambda raw: areas)
+        greaseweazle.track.PLLTrack = lambda **kw: OneTurn()
+        try:
+            return g.read_track(40, 0), g
+        finally:
+            ibm.IBMTrack.mfm_decode_raw, greaseweazle.track.PLLTrack = saved
+    got40, drv = from_drive(40)
+    served = drv.sectors(40, 0) or []
+    check(got40 is not None and not drv.standard_track(40, 0) and
+          [(x.r, x.status) for x in served] == [(r, d88.CRC_ERROR if r == 5 else 0) for r in range(1, 9)],
+          "a track whose sector 5 never reads is served with that sector's error, and can't be written")
+    got44, drv = from_drive(44)
+    check(got44 is None and drv.sectors(40, 0) is None, "a track whose sectors all name another cylinder doesn't read")
+
+    # 32c. Protection the search can't all reach still keeps the start of its data.
+    odd_track = d88.plain_sectors(1, 0, bytes(8192), 3) + [d88.Sector(1, 0, 0xF0, 4, bytes(2048), d88.CRC_ERROR),
+                                                           d88.Sector(1, 0, 0xF1, 7, bytes(16384), d88.CRC_ERROR)]
+    fitted = d88.fit(odd_track)
+    check(len(fitted[8].data) > 0, "one sector too big to reach doesn't cost the others their data")
+
+    # 33. Sectors from another cylinder: the drive is that many tracks off, and says so.
+    class Idam:
+        def __init__(self, c: int) -> None:
+            self.c, self.crc = c, 0
+    class Raw:
+        sectors = [type("S", (), {"idam": Idam(4)})() for _ in range(8)]
+    class Dat:
+        raw = Raw()
+    said = floppy_drive.elsewhere(Dat(), 0)
+    check("cylinder 4" in said and "4 tracks in" in said, "a head 4 tracks in is named as such")
+    check(floppy_drive.elsewhere(Dat(), 4) == "", "the right cylinder is no complaint")
 
 
 if __name__ == "__main__":

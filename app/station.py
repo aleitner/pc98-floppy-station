@@ -2,8 +2,9 @@
 
 Double-click it (or run `python3 station.py`). A window shows the Greaseweazle and both
 drives, Start/Stop, the two image files an emulator opens, and a Play button when
-RetroArch with the PC-98 core is installed. Each drive can be backed up to an image file,
-and a backup can stand in for a drive: the bridge then serves that file instead.
+RetroArch with the PC-98 core is installed. Each drive's disk can be backed up: one read
+of every track, kept as raw flux (.scp) and as a D88 image made from it, copy protection
+included. A backup can stand in for a drive: the bridge then serves that file instead.
 
 The bridge runs as a child process (floppy_bridge.py), so a drive fault can never take the
 window down. Settings and a log live in the user's config folder.
@@ -15,13 +16,13 @@ window down. Settings and a log live in the user's config folder.
 from __future__ import annotations
 
 import collections
-import glob
 import http.server
 import json
 import logging
 import mimetypes
 import os
 import platform
+import re
 import secrets
 import shutil
 import subprocess
@@ -34,7 +35,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
-from bridge_paths import EXT, cmd_path, default_mountpoint, plain_words, unmount
+import d88
+from bridge_paths import DRIVE_EXT, EXT, IMAGE_EXTS, cmd_path, default_mountpoint, plain_words, unmount
 
 SYSTEM = platform.system()
 PORT = int(os.environ.get("PC98_STATION_PORT") or 9801)   # overridable so a test can run beside the real thing
@@ -46,6 +48,7 @@ STATIC = os.path.realpath(os.path.join(HERE, "static"))
 SLOTS = ("FD1", "FD2")
 MAX_BODY = 64 * 1024
 BACKUP_GIVE_UP = 8                     # unreadable tracks in a row before a backup stops
+BACKUP_EXTRA_CYLS = 3                  # read this far past the format's last cylinder: protection hides there
 
 log = logging.getLogger("station")
 
@@ -130,7 +133,7 @@ def label_of(sector: bytes) -> str:
 def disk_label(path: str) -> str:
     try:
         with open(path, "rb") as f:
-            return label_of(f.read(16))
+            return label_of(d88.boot_sector_start(f, path.lower().endswith(".d88")))
     except OSError:
         return ""
 
@@ -160,18 +163,61 @@ def store_image(library: str, image: bytes, label: str, ext: str) -> str:
         path = os.path.join(library, f"{stem} ({n}){ext}")
         n += 1
     tmp = path + ".part"
-    with open(tmp, "wb") as f:
-        f.write(image)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(image)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
     return path
 
 
-def list_library(library: str, ext: str) -> List[str]:
+def free_name(folder: str, stem: str, ext: str) -> str:
+    """A path in `folder` that nothing has yet: `stem.ext`, else `stem (2).ext` and so on."""
+    path, n = os.path.join(folder, stem + ext), 2
+    while os.path.exists(path):
+        path, n = os.path.join(folder, f"{stem} ({n}){ext}"), n + 1
+    return path
+
+
+def game_stem(name: str) -> str:
+    """A disk's name without its number: "Xak2-No1" -> "Xak2", "Ys II Disk 2" -> "Ys II"."""
+    return re.sub(r"[\s_-]*(no\.?|disk|d)?\s*\d+$", "", name, flags=re.IGNORECASE) or name
+
+
+def game_folder(library: str, label: str) -> str:
+    """Where a backup of this disk goes: the game folder that already holds one of its other
+    disks, else a new folder named for the game."""
+    stem = game_stem(label or "disk")
     try:
-        names = [os.path.basename(p) for p in glob.glob(os.path.join(glob.escape(library), "*" + ext))]
+        entries = sorted(os.listdir(library))
     except OSError:
-        return []
-    return sorted(names, key=str.lower)
+        entries = []
+    for name in entries:
+        folder = os.path.join(library, name)
+        if name.startswith(".") or not os.path.isdir(folder):
+            continue
+        try:
+            files = os.listdir(folder)
+        except OSError:
+            continue
+        if any(f.lower().endswith(IMAGE_EXTS) and game_stem(os.path.splitext(f)[0]).lower() == stem.lower()
+               for f in files):
+            return folder
+    return os.path.join(library, safe_name(stem))
+
+
+def list_library(library: str, exts: Tuple[str, ...]) -> List[str]:
+    """Images in the library and in its game folders, a game's saves included, by path from
+    the library. The raw flux isn't an image an emulator opens."""
+    names: List[str] = []
+    for top, dirs, files in os.walk(library):
+        depth = 0 if top == library else os.path.relpath(top, library).count(os.sep) + 1
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "Flux"] if depth < 2 else []
+        names += [os.path.relpath(os.path.join(top, f), library).replace(os.sep, "/")
+                  for f in files if f.lower().endswith(exts) and not f.startswith(".")]
+    return sorted(set(names), key=str.lower)
 
 
 # -- running other programs ------------------------------------------------------------
@@ -292,7 +338,8 @@ class Bridge:
         with self.lock:
             if self.running:
                 return "already running"
-            args = ["--bridge", "--control-stdin", "--format", cfg.format, "--mountpoint", cfg.mountpoint,
+            args = ["--bridge", "--control-stdin", "--window-pid", str(os.getpid()), "--format", cfg.format,
+                    "--mountpoint", cfg.mountpoint,
                     "--fd1", cfg.left or "none", "--fd2", cfg.right or "none", "--proven", cfg.proven]
             for letter, n in cfg.offsets.items():
                 if n:
@@ -468,8 +515,8 @@ def emulator_command(cfg: Config) -> Union[List[str], str, None]:
     """What to run: the user's own command with the files filled in (a string on Windows, where
     the system parses command lines itself), RetroArch's command, or None if nothing is known."""
     play = cmd_path(cfg.mountpoint, "play.cmd")
-    fd1 = cmd_path(cfg.mountpoint, "FD1" + EXT[cfg.format])
-    fd2 = cmd_path(cfg.mountpoint, "FD2" + EXT[cfg.format])
+    fd1 = cmd_path(cfg.mountpoint, "FD1" + DRIVE_EXT)
+    fd2 = cmd_path(cfg.mountpoint, "FD2" + DRIVE_EXT)
     custom = cfg.emulator_command.strip()
     if custom:
         filled = custom.replace("{play}", play).replace("{fd1}", fd1).replace("{fd2}", fd2)
@@ -584,7 +631,7 @@ class Station:
             elif not self.running and self.bridge.error:
                 self.message = ""             # the bridge box shows what went wrong
         cfg = self.cfg
-        ext = EXT[cfg.format]
+        exts = tuple(e for e in IMAGE_EXTS if e == ".d88" or e == EXT[cfg.format])
         board = None if self.busy else board_port()
         if not self.driver_ok and time.monotonic() - self.driver_asked > 3:
             self.driver_ok, self.driver_msg = driver_check()
@@ -598,7 +645,7 @@ class Station:
             letter = cfg.letter(name)
             image = cfg.images.get(name, "")
             info: Dict[str, Any] = {"drive": letter, "side": "left" if name == "FD1" else "right",
-                                    "file": cmd_path(cfg.mountpoint, name + ext),
+                                    "file": cmd_path(cfg.mountpoint, name + DRIVE_EXT),
                                     "image": image, "image_name": os.path.basename(image) if image else ""}
             if image:
                 present = os.path.isfile(image)
@@ -626,7 +673,7 @@ class Station:
             "identified": cfg.left in ("A", "B"), "all_images": self.all_images,
             "mountpoint": cfg.mountpoint, "play": cmd_path(cfg.mountpoint, "play.cmd"),
             "drives": drives, "probe_error": self.probe_error,
-            "library": {"folder": self.library, "images": list_library(self.library, ext)},
+            "library": {"folder": self.library, "images": list_library(self.library, exts)},
             "emulator": {"found": emu_ok, "custom": bool(cfg.emulator_command.strip()),
                          "name": "RetroArch, Neko Project II kai core" if emu_ok else ""},
             "log": list(self.events), "message": self.message, "job": self.job,
@@ -763,54 +810,76 @@ class Station:
             return "backing up " + name
 
     def _backup_worker(self, name: str, letter: str) -> None:
+        """Each track read once, a few turns: the flux goes into a .scp file as it comes, and a
+        D88 is made from the same reads, odd sectors and all. The original need never be read
+        again: anything else can be made from the flux."""
         from floppy_drive import GwBackend, GwBoard
+        from greaseweazle.image.scp import SCP
         job = self.job
-        ext = EXT[self.cfg.format]
+        part = os.path.join(self.library, ".backup in progress.scp")
         try:
+            os.makedirs(self.library, exist_ok=True)
             with GwBoard() as board, GwBackend(letter, self.cfg.format, board, self.cfg.offsets.get(letter, 0)) as be:
-                be.READ_ATTEMPTS = 2            # an original gets few passes; the image shows what was weak
                 if not be.has_disk():
                     raise RuntimeError("no disk in the drive")
-                job["total"] = be.cyls * be.heads
-                chunks: List[bytes] = []
+                cyls = be.cyls + BACKUP_EXTRA_CYLS
+                job["total"] = cyls * be.heads
+                tracks: List[List[d88.Sector]] = []
                 label = ""
                 in_a_row = 0
-                for cyl in range(be.cyls):
-                    for head in range(be.heads):
-                        data = be.read_track(cyl, head)
-                        if data is None:
-                            if be.disk_changed():
-                                raise RuntimeError("the disk was changed during the backup; nothing saved")
-                            job["bad"].append(f"{cyl}.{head}")
-                            data = b"\0" * be.track_bytes
-                            in_a_row += 1
-                            if in_a_row >= BACKUP_GIVE_UP:
-                                raise RuntimeError(f"{in_a_row} tracks in a row won't read, so the backup stopped "
-                                                   "to spare the disk. It may be blank or another format, or "
-                                                   "the heads need cleaning.")
-                        else:
-                            in_a_row = 0
-                            job["odd"] += not be.standard_track(cyl, head)
-                        if cyl == 0 and head == 0:
-                            label = label_of(data)
-                        chunks.append(data)
-                        job["track"] = cyl * be.heads + head + 1
-                if be.disk_changed():
-                    raise RuntimeError("the disk was changed during the backup; nothing saved")
+                with SCP.to_file(part, None, False, {}) as scp:
+                    for cyl in range(cyls):
+                        for head in range(be.heads):
+                            flux, image, found, plain = be.capture(cyl, head)
+                            scp.emit_track(cyl, head, flux)
+                            tracks.append(found)
+                            job["track"] = cyl * be.heads + head + 1
+                            if cyl >= be.cyls:
+                                continue                 # past the format: kept only if something is there
+                            if cyl == 0 and head == 0 and image is None and be.why_unreadable(0, 0):
+                                raise RuntimeError(f"track 0 {be.why_unreadable(0, 0)}. The backup stopped "
+                                                   "at once to spare the disk; nothing was saved")
+                            if image is None:
+                                job["bad"].append(f"{cyl}.{head}")
+                                in_a_row += 1
+                                if in_a_row >= BACKUP_GIVE_UP:
+                                    raise RuntimeError(f"{in_a_row} tracks in a row won't read, so the backup "
+                                                       "stopped to spare the disk. It may be blank or another "
+                                                       "format, or the heads need cleaning.")
+                            else:
+                                in_a_row = 0
+                                job["odd"] += not plain
+                                if cyl == 0 and head == 0:
+                                    label = label_of(image)
+                    if be.disk_changed():
+                        raise RuntimeError("the disk was changed during the backup; nothing saved")
                 bad = len(job["bad"])
                 odd = job["odd"]
-                stem = (label or "disk") + (f" ({bad} unreadable tracks)" if bad else "") + \
-                    (f" ({odd} non-standard tracks)" if odd else "")
-                path = store_image(self.library, b"".join(chunks), stem, ext)
+                media = d88.MEDIA.get(self.cfg.format, 0x20)
+                image_file = d88.Image(label or "disk", media, False, tracks).to_bytes()
+                stem = (label or "disk") + (f" ({bad} unreadable tracks)" if bad else "")
+                folder = game_folder(self.library, label)
+                os.makedirs(folder, exist_ok=True)
+                # The flux first: all of every track, the one thing that can't be made again,
+                # so it's named for the disk alone. The image beside it is made from it.
+                flux_path = free_name(folder, safe_name(label) if label else "disk", ".scp")
+                os.replace(part, flux_path)
+                path = store_image(folder, image_file, stem, ".d88")
                 job["file"] = path
-                self.note(f"{name}: saved {path}" + (f", {bad} track(s) unreadable" if bad else "") +
-                          (f", {odd} non-standard, probably copy protection, which the image can't hold" if odd else ""))
+                job["flux"] = flux_path
+                self.note(f"{name}: saved {path} and its flux {flux_path}" +
+                          (f"; {bad} track(s) unreadable" if bad else "") +
+                          (f"; {odd} track(s) hold more than plain sectors, probably copy protection, "
+                           "and the image keeps them" if odd else ""))
         except RuntimeError as e:             # our own messages: no disk, disk changed
             job["error"] = str(e)
             self.note(f"{name}: backup failed: {e}")
         except Exception as e:
             job["error"] = explain(e)
             self.note(f"{name}: backup failed: {job['error']}")
+        finally:
+            if os.path.exists(part):
+                os.remove(part)
         job["done"] = True
         self.refresh_probe()
 

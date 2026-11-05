@@ -9,7 +9,9 @@ track at a time, because a floppy can only be written a track at a time:
   flush  -> each dirty track is written to the disk and verified
 
 TrackDisk is backend-agnostic: GwBackend drives the real hardware through the
-Greaseweazle library; ImageBackend uses an image file and exists for testing.
+Greaseweazle library; ImageBackend and D88Backend use image files standing in for a drive.
+A track that holds more than plain sectors (copy protection) is kept as all its sectors
+too, for d88.View to serve.
 """
 from __future__ import annotations
 
@@ -18,6 +20,9 @@ import struct
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
+
+import d88
+from d88 import Sector
 
 
 class DiskError(OSError):
@@ -33,10 +38,13 @@ class Backend(Protocol):
     cyls: int
     heads: int
     track_bytes: int
+    sector_n: int                         # size code of the format's sectors: 3 is 1024 bytes
     proven: bool                          # a swap on this drive is known to be seen
 
     def read_track(self, cyl: int, head: int) -> Optional[bytes]: ...
     def standard_track(self, cyl: int, head: int) -> bool: ...
+    def sectors(self, cyl: int, head: int) -> Optional[List[Sector]]: ...
+    def why_unreadable(self, cyl: int, head: int) -> str: ...
     def write_track(self, cyl: int, head: int, data: bytes) -> bool: ...
     def disk_changed(self) -> bool: ...
     def poll_change(self) -> bool: ...
@@ -51,8 +59,9 @@ class ImageBackend:
     """Tracks stored in an image file: a backup standing in for a drive. A file that can't
     be written counts as write-protected, like a covered notch."""
 
-    def __init__(self, path: str, cyls: int, heads: int, track_bytes: int) -> None:
+    def __init__(self, path: str, cyls: int, heads: int, track_bytes: int, sector_n: int = 3) -> None:
         self.path, self.cyls, self.heads, self.track_bytes = path, cyls, heads, track_bytes
+        self.sector_n = sector_n
         self.changed = False
         self.proven = True
         self.readonly = not os.access(path, os.W_OK)
@@ -74,6 +83,12 @@ class ImageBackend:
 
     def standard_track(self, cyl: int, head: int) -> bool:
         return True
+
+    def sectors(self, cyl: int, head: int) -> Optional[List[Sector]]:
+        return None                       # a sector image holds plain tracks only
+
+    def why_unreadable(self, cyl: int, head: int) -> str:
+        return ""
 
     def write_track(self, cyl: int, head: int, data: bytes) -> bool:
         with open(self.path, "r+b") as f:
@@ -103,6 +118,59 @@ class ImageBackend:
 
     def close(self) -> None:
         pass
+
+
+class D88Backend(ImageBackend):
+    """A D88 file standing in for a drive: protected tracks and all. A save is written into
+    the file in place, sector by sector; only plain sectors are ever written."""
+
+    def __init__(self, path: str, cyls: int, heads: int, track_bytes: int, sector_n: int = 3) -> None:
+        super().__init__(path, cyls, heads, track_bytes, sector_n)
+        self._load()
+
+    def _load(self) -> None:
+        with open(self.path, "rb") as f:
+            raw = f.read()
+        self.image = d88.Image.from_bytes(raw)
+        self.where = self.image.data_offsets(raw)
+        self.readonly = self.readonly or self.image.protected
+
+    def _track(self, cyl: int, head: int) -> List[Sector]:
+        idx = cyl * self.heads + head
+        return self.image.tracks[idx] if idx < len(self.image.tracks) else []
+
+    def poll_change(self) -> bool:
+        new = super().poll_change()
+        if new and self.has_disk():
+            self._load()
+        return new
+
+    def read_track(self, cyl: int, head: int) -> Optional[bytes]:
+        secs = self._track(cyl, head)
+        if not secs:
+            return None
+        return d88.image_of(secs, cyl, head, self.track_bytes, self.sector_n)
+
+    def standard_track(self, cyl: int, head: int) -> bool:
+        return d88.is_plain(self._track(cyl, head), cyl, head, self.track_bytes, self.sector_n)
+
+    def sectors(self, cyl: int, head: int) -> Optional[List[Sector]]:
+        return None if self.standard_track(cyl, head) else list(self._track(cyl, head))
+
+    def write_track(self, cyl: int, head: int, data: bytes) -> bool:
+        size = 128 << self.sector_n
+        where = self.where.get((cyl, head), {})
+        secs = self._track(cyl, head)
+        with open(self.path, "r+b") as f:
+            for i, s in enumerate(secs):
+                if s.id not in d88.plain_ids(cyl, head, self.track_bytes, self.sector_n) or s.status:
+                    continue
+                new = data[(s.r - 1) * size:s.r * size]
+                if new != s.data:
+                    f.seek(where[s.id])
+                    f.write(new)
+                    secs[i] = Sector(s.c, s.h, s.r, s.n, new, s.status, s.deleted)
+        return True
 
 
 def is_standard(dat: Any) -> bool:
@@ -214,6 +282,7 @@ class GwBackend:
         probe = disk.mk_track(0, 0)
         assert probe is not None
         self.track_bytes = len(probe.get_img_track())
+        self.sector_n = int(probe.sectors[0].idam.n) if probe.sectors else 3
 
         self._cyl_offset = cyl_offset      # steps from where this drive thinks track 0 is to the real one
         self._board = board
@@ -229,6 +298,8 @@ class GwBackend:
         self._empty_seen = 0.0
         self.proven = proven         # pin 34 has been seen low: a swap on this drive will be noticed
         self._odd: Set[Tuple[int, int]] = set()   # tracks a write would rebuild into something else
+        self._extra: Dict[Tuple[int, int], List[Sector]] = {}   # all the sectors of each of those
+        self._why: Dict[Tuple[int, int], str] = {}
         self._quiet_step = True
         board.backends.append(self)
         self._pins = self._pins_supported()
@@ -270,8 +341,10 @@ class GwBackend:
             if not self._ticks_per_rev:
                 self._ticks_per_rev = float(self._usb.read_track(2).ticks_per_rev)
             self._check_change()
-        except Exception:
+        except Exception as e:
             self._usb.drive_motor(self._drive.unit_id, False)   # no disk, or no answer: not active
+            if "No Index" in str(e):
+                raise DiskError(6, "no disk in the drive, or its lever is open") from e
             raise
         self._usb.drive_motor(self._drive.unit_id, True)        # sending a head home stops it
         self._active = True
@@ -405,22 +478,86 @@ class GwBackend:
                     dat.decode_flux(flux, pll)
                 if dat.nr_missing() == 0:
                     self._last_use = time.monotonic()
+                    self._why.pop((cyl, head), None)
+                    image = bytes(dat.get_img_track())
                     if is_standard(dat):
                         self._odd.discard((cyl, head))
+                        self._extra.pop((cyl, head), None)
                     else:
                         self._odd.add((cyl, head))
-                    return bytes(dat.get_img_track())
+                        self._extra[(cyl, head)] = self._all_sectors(cyl, head, image)
+                    return image
                 if 0 < attempt == self.READ_ATTEMPTS - 2:   # re-seat the head before the last try
                     self._check_change()                # these seeks would clear the latch
                     if self._changed:
                         return None
                     self._seek(0, 0)
                     self._seek(cyl + self._cyl_offset, head)
+            # Not every sector read. If the ones that did are this track's own, the rest are
+            # what copy protection often is, a sector whose data never reads without an error:
+            # serve the track as it reads, errors and all. Sectors that all say another
+            # cylinder mean the head is in the wrong place, and are no track of this disk.
+            found = all_sectors(self._disk.mk_track(cyl, head), flux, None, cyl, head, self.track_bytes,
+                                self.sector_n)
+            if any(x.c == cyl and x.h == head for x in found):
+                self._why.pop((cyl, head), None)
+                self._odd.add((cyl, head))
+                self._extra[(cyl, head)] = found
+                return d88.image_of(found, cyl, head, self.track_bytes, self.sector_n)
+            self._why[(cyl, head)] = elsewhere(dat, cyl)
             return None
 
     def standard_track(self, cyl: int, head: int) -> bool:
         """After a read of that track: would rewriting it keep everything on it?"""
         return (cyl, head) not in self._odd
+
+    def sectors(self, cyl: int, head: int) -> Optional[List[Sector]]:
+        """After a read of a track that isn't plain: every sector on it, in the order the head
+        meets them, each with its ID, its status and the bytes a read of it returns."""
+        return self._extra.get((cyl, head))
+
+    def why_unreadable(self, cyl: int, head: int) -> str:
+        return self._why.get((cyl, head), "")
+
+    def capture(self, cyl: int, head: int, attempts: int = 2) -> Tuple[Any, Optional[bytes], List[Sector], bool]:
+        """One track for a backup, in as few turns of the disk as will do: the flux of a read
+        of a few turns, the plain image if every sector decoded, every sector found, and
+        whether the track is a plain one. Everything is decoded from that same read, so the
+        flux kept is exactly what the rest was made from. A second read only if sectors
+        were missing."""
+        with self._lock:
+            self._activate()
+            self._check_change()
+            if self._changed:
+                raise DiskError(5, "the disk was changed")
+            self._last_use = time.monotonic()
+            self._seek(cyl + self._cyl_offset, head)
+            flux: Any = None
+            dat: Any = None
+            for _ in range(attempts):
+                flux = self._usb.read_track(revs=3)
+                flux._ticks_per_rev = self._ticks_per_rev
+                dat = self._disk.decode_flux(cyl, head, flux) if cyl < self.cyls else None
+                for pll in self._plls:
+                    if dat is None or dat.nr_missing() == 0:
+                        break
+                    dat.decode_flux(flux, pll)
+                if dat is None or dat.nr_missing() == 0:
+                    break                        # complete, or past the format: no second read
+            self._last_use = time.monotonic()
+            image = bytes(dat.get_img_track()) if dat is not None and dat.nr_missing() == 0 else None
+            template = self._disk.mk_track(min(cyl, self.cyls - 1), head)
+            found = all_sectors(template, flux, image, cyl, head, self.track_bytes, self.sector_n)
+            self._why[(cyl, head)] = "" if image is not None else elsewhere(dat, cyl)
+            return flux, image, found, image is not None and is_standard(dat)
+
+    def _all_sectors(self, cyl: int, head: int, image: bytes) -> List[Sector]:
+        """Read the track again, a few turns this time, and keep everything on it. Sectors
+        whose data runs past the index need the turn after it. The plain sectors keep the
+        bytes the format's decoder settled on, which may have taken several tries."""
+        flux = self._usb.read_track(revs=3)
+        flux._ticks_per_rev = self._ticks_per_rev
+        return all_sectors(self._disk.mk_track(cyl, head), flux, image, cyl, head, self.track_bytes, self.sector_n)
 
     def _over_track(self, cyl: int, head: int) -> bool:
         """Is the head over the track about to be rewritten? The PC-98's controller found each
@@ -506,6 +643,61 @@ class GwBackend:
         self.close()
 
 
+def all_sectors(track: Any, flux: Any, image: Optional[bytes], cyl: int, head: int, track_bytes: int,
+                n: int) -> List[Sector]:
+    """Every sector in a read of one track: what a disk controller would find, odd ones
+    included. A data CRC error is kept as the status a PC-98 reports for it."""
+    from greaseweazle.codec.ibm.ibm import IBMTrack, Mark, Mode
+    from greaseweazle.codec.ibm.ibm import Sector as GwSector
+    from greaseweazle.track import PLLTrack
+    plain = {s.id: s for s in d88.plain_sectors(cyl, head, image, n)} if image is not None else {}
+    found: List[Tuple[int, Sector]] = []
+    if getattr(track, "mode", None) is Mode.MFM:
+        flux.cue_at_index()
+        raw = PLLTrack(time_per_rev=track.time_per_rev, clock=track.clock, data=flux)
+        turn = raw.revolutions[0].nr_bits if raw.revolutions else 0
+        for a in sorted(IBMTrack.mfm_decode_raw(raw), key=lambda a: a.start):
+            if not isinstance(a, GwSector) or a.idam.crc != 0:
+                continue
+            i = a.idam
+            sec = Sector(i.c, i.h, i.r, i.n, bytes(a.dam.data), d88.CRC_ERROR if a.dam.crc else 0,
+                         a.dam.mark == Mark.DDAM)
+            # The same sector comes round on every turn; one with the same ID somewhere else
+            # on the track is another sector, which copy protection uses too.
+            if any(k.id == sec.id and same_place(start, a.start, turn) for start, k in found):
+                continue
+            found.append((a.start, sec))
+    out = [sec for _, sec in sorted(found, key=lambda x: x[0])]
+    swapped: Set[Tuple[int, int, int, int]] = set()      # the first of each ID takes the decoder's bytes
+    for k, s in enumerate(out):
+        if s.id in plain and not s.deleted and s.id not in swapped:
+            out[k] = plain[s.id]
+            swapped.add(s.id)
+    seen = {s.id for s in out}
+    return out + [s for k, s in plain.items() if k not in seen]
+
+
+def same_place(a: int, b: int, turn: int) -> bool:
+    """Two positions on a track, in bit cells from the index, within a sector header of each other."""
+    d = abs(a - b) % turn if turn else abs(a - b)
+    return min(d, turn - d) < 1000 if turn else d < 1000
+
+
+def elsewhere(dat: Any, cyl: int) -> str:
+    """A track that won't read because its sectors say they belong to another cylinder: the
+    drive's track 0 isn't the disk's, and every track is out by as much."""
+    raw = getattr(dat, "raw", None)
+    if raw is None:
+        return ""
+    found = {s.idam.c for s in raw.sectors if s.idam.crc == 0}
+    if len(found) != 1 or cyl in found or sum(s.idam.crc == 0 for s in raw.sectors) < 4:
+        return ""
+    other = found.pop()
+    return (f"this track's sectors say they're cylinder {other}: the drive's head is {abs(other - cyl)} "
+            f"track{'s' if abs(other - cyl) > 1 else ''} {'in' if other > cyl else 'out'} from where it "
+            "should be. If the disk was made on another machine, the drive needs realigning")
+
+
 # --------------------------------------------------------------------------- the disk
 class TrackDisk:
     """The whole disk as one addressable block, backed by a track cache over a Backend.
@@ -526,6 +718,8 @@ class TrackDisk:
         self.verified = False                 # track 0 of this disk has decoded on this drive
         self._failed: Dict[int, float] = {}   # tracks that wouldn't read, and when they last failed
         self._odd: Set[int] = set()           # tracks a write would rebuild into something else
+        self._extra: Dict[int, List[Sector]] = {}   # all the sectors of those, for a D88 view
+        self.epoch = 0                        # counts disks: a view's cache belongs to one
         self._failures: List[float] = []      # when reads failed lately
         self.left_alone = False               # too many failed: no more reads until the disk comes out
 
@@ -543,9 +737,18 @@ class TrackDisk:
             if data is None:
                 self._failed[idx] = time.monotonic()
                 self._note_failure()
-                raise DiskError(5, f"can't read track {cyl}.{head}")
+                why = self.b.why_unreadable(cyl, head)
+                raise DiskError(5, f"can't read track {cyl}.{head}" + (f": {why}" if why else ""))
             if not self.b.standard_track(cyl, head):
                 self._odd.add(idx)
+                extra = self.b.sectors(cyl, head)
+                if extra is not None:
+                    self._extra[idx] = extra
+                    bad = [f"{x.r:02X}" for x in extra if x.status]
+                    if bad:
+                        self._log(f"track {cyl}.{head}: sector{'s' if len(bad) > 1 else ''} {', '.join(bad)} "
+                                  "read with a data error, as copy protection or a weak spot gives; "
+                                  "served that way, and the track can't be written")
             t = bytearray(data)
             self._cache[idx] = t
             if idx == 0:
@@ -561,6 +764,17 @@ class TrackDisk:
             self.left_alone = True
             self.broken = ("too many tracks won't read, so this disk is being left alone. Clean the "
                            "heads, look the disk over, then take it out and put it back")
+
+    def sectors(self, idx: int) -> List[Sector]:
+        """One track as sectors, for a D88 view: all of them if it held more than a plain
+        track, else the plain ones, with any change not yet saved."""
+        with self._lock:
+            image = bytes(self._track(idx))
+            extra = self._extra.get(idx)
+            if extra is not None:
+                return list(extra)
+            cyl, head = divmod(idx, self.b.heads)
+            return d88.plain_sectors(cyl, head, image, self.b.sector_n)
 
     def read_at(self, offset: int, size: int) -> bytes:
         """`size` bytes from `offset`, reading tracks from the disk as needed."""
@@ -672,6 +886,8 @@ class TrackDisk:
             self._dirty.clear()
             self._failed.clear()
             self._odd.clear()
+            self._extra.clear()
+            self.epoch += 1
             self._failures.clear()
             self.left_alone = False
             self.broken = None

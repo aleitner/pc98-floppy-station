@@ -19,6 +19,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict, List
 
+from test_bridge import as_image, at
+
 SIZE = 1232 * 1024
 HERE = os.path.dirname(os.path.abspath(__file__))
 fails = 0
@@ -93,6 +95,21 @@ def main() -> int:
     check('input_auto_game_focus = "1"' in open(extra).read() and "config_save_on_exit" in open(extra).read(),
           "the keyboard goes to the game, and the user's own settings stay as they are")
     shutil.rmtree(base, ignore_errors=True)
+
+    # one folder per game: a backup joins its game's other disks; the list shows them all
+    import station
+    games = tempfile.mkdtemp(prefix="games")
+    os.makedirs(os.path.join(games, "Xak II", "Saves"))
+    for name in ("Xak II/Xak2-No1.d88", "Xak II/Xak2-No1.scp", "Xak II/Saves/Xak2 - Disk 2 (Save 3).d88", "loose.hdm"):
+        open(os.path.join(games, name), "wb").close()
+    check(station.game_folder(games, "Xak2-No3") == os.path.join(games, "Xak II"),
+          "a backup goes in the folder that holds its game's other disks")
+    check(station.game_folder(games, "Xak-No1") == os.path.join(games, "Xak"), "another game gets a folder of its own")
+    check(station.list_library(games, (".d88", ".hdm")) ==
+          ["loose.hdm", "Xak II/Saves/Xak2 - Disk 2 (Save 3).d88", "Xak II/Xak2-No1.d88"],
+          "the library lists images in game folders and their saves, not the flux")
+    shutil.rmtree(games, ignore_errors=True)
+
     d = tempfile.mkdtemp(prefix="stationtest")
     lib = os.path.join(d, "library")
     os.makedirs(lib)
@@ -179,7 +196,7 @@ def main() -> int:
         s = get("api/state")
         fd1, fd2 = s["drives"]["FD1"]["file"], s["drives"]["FD2"]["file"]
         check(os.path.isfile(fd1) and os.path.isfile(fd2), "both drive files exist in the mount")
-        check(open(fd1, "rb").read() == da, "FD1 reads as its image")
+        check(as_image(fd1) == da, "FD1 reads as its image")
         if sys.platform != "win32":                      # WinFsp refuses the open instead, checked below
             check(os.stat(fd1).st_mode & 0o222 == 0, "the protected image gives a read-only file")
         check(open(s["play"]).read() == f"np2kai {fd1} {fd2}\n", "play.cmd names both files")
@@ -188,7 +205,7 @@ def main() -> int:
 
         save = b"SAVEGAME" * 128
         with open(fd2, "r+b", buffering=0) as f:
-            f.seek(40 * 1024)
+            f.seek(at(40 * 1024))
             f.write(save)
         check(open(b, "rb").read()[40 * 1024:41 * 1024] == db[40 * 1024:41 * 1024], "a save isn't on the image at once")
         check(wait_for(lambda: open(b, "rb").read()[40 * 1024:41 * 1024] == save, 10), "a save reaches the image after the quiet moment")

@@ -48,22 +48,32 @@ program a second time only brings the window back.
 that holds a disk is remembered as the left drive; it becomes `FD1`. If you ever move the
 ribbon, press "Swap left and right".
 
-**Every run:** press Start. The drives appear as `FD1.hdm` and `FD2.hdm` in `~/PC98Drives`
-(`P:` on Windows), with a `play.cmd` beside them. A disk whose write notch is covered shows
-as write-protected and the file is read-only, so the game can never write to it. On Windows
-the file doesn't carry the read-only flag: opening it for writing is refused instead. The
-RetroArch core tests exactly that, but an emulator that only reads the flag will show the disk
-as writable and report an error on a save.
+**Every run:** press Start. The drives appear as `FD1.d88` and `FD2.d88` in `~/PC98Drives`
+(`P:` on Windows), with a `play.cmd` beside them. A D88 image keeps every sector with its ID
+and the status a read of it gives, so a disk's copy protection reaches the game the way it
+reaches a real PC-98; a plain `.hdm` can't, and a game that checks then refuses to go on.
+A disk whose write notch is covered shows as write-protected and the file is read-only, so the
+game can never write to it. On Windows the file doesn't carry the read-only flag: opening it for
+writing is refused instead. The RetroArch core tests exactly that, but an emulator that only
+reads the flag will show the disk as writable and report an error on a save.
 
-**Backups:** each drive has *Back up this disk*, which reads the disk once, track by track,
-into `Documents/PC98 Floppies` under the disk's own name (unreadable tracks are counted,
-not retried over and over). *Use a backup instead* lists that folder: pick an image and the
-drive plays from the file rather than the floppy; saves then land in the file. *Use the
-drive* switches back. An image goes through the same bridge as a drive, so the emulator
-always sees the same two files, and a read-only image shows as a write-protected disk.
+**Backups:** each drive has *Back up this disk*, which reads every track once, a few turns of
+it, and keeps that read twice over: a D88 image under the disk's own name, and beside it the
+raw flux (`.scp`, everything the head picked up, so nothing ever needs reading from the
+original again). Each game has a folder in `Documents/PC98 Floppies`: a backup goes in
+the one holding that game's other disks (`Xak2-No3` joins `Xak2-No1` and `Xak2-No2`), or a
+new one named for the game. The read goes three cylinders past the format's last, where
+protection sometimes hides. *Use a backup instead* lists the images in the library and its
+game folders, `.d88` and `.hdm` alike, a game's `Saves` folder included: pick an image and the
+drive plays from the file rather than the floppy; saves then land in the file. *Use the drive* switches back.
+An image goes through the same bridge as a drive, so the emulator always sees the same two
+files, and a read-only image shows as a write-protected disk.
 
 A backup whose read had unreadable tracks is named for it, e.g. `Xak2-No2 (3 unreadable
-tracks).hdm`, with those tracks filled with zeros, so it is never mistaken for a clean one.
+tracks).d88`, with only the sectors that did read in those tracks, so it is never mistaken
+for a clean one. If track 0's sectors say they belong to another cylinder, the backup stops at
+once: the drive's head is that far off, and a disk made on another machine won't read until
+the drive is realigned.
 
 **Play:** if RetroArch with the Neko Project II kai core is installed, the Play button starts
 it with both drives loaded. For any other emulator, open the two files in its first and
@@ -78,7 +88,7 @@ dropped, never written to the next disk, and the log says so.
 Games started with Play get the whole keyboard, since PC-98 games use keys RetroArch keeps for
 itself: F10 hands it back to RetroArch and F10 again returns it. Without a core that has `-l`,
 reads stop the sound and picture for a moment, and a game waiting for a disk change may need
-the emulator's own menu: F12, FDD, FDD1, Open, `FD1.hdm`.
+the emulator's own menu: F12, FDD, FDD1, Open, `FD1.d88`.
 
 Stop writes anything unsaved first. Closing the window ends the program a few seconds later;
 the drives are stopped first, with anything pending written. Ctrl-C in a terminal does the
@@ -104,12 +114,27 @@ A drive whose track 0 has drifted (below) gets its steps there too: `"offsets": 
   isn't ready, so nothing can write in that gap. A file opened before a swap can't write
   afterwards, and a write that would change the disk's own name in its boot sector is refused,
   along with everything after it, until the next swap.
+- After a swap, nothing is written until the emulator has read from the new disk. A game reads
+  a disk before saving to it; an emulator that kept a changed track of the old disk in memory
+  puts it back as it lets go of that disk, and that write would land on the new one.
+- A track some of whose sectors won't read is served as it reads, each bad sector with the
+  error a PC-98 would get, since that is what copy protection often is. Such a track is never
+  written. A track whose sectors all name another cylinder is the head in the wrong place, and
+  reads as an error.
+
+Two limits. The drives are served as cylinders 0 to 76, the format's own, so anything a backup
+found past them isn't played. And Neko Project II keeps a changed D88 track in memory and writes
+it to the file later, so when the bridge has to refuse that write, the game has already been
+told the save worked: the window's log is where a refused save shows. Without `-l` the core
+writes the track back only when the game moves to another track or the disk is ejected, which
+is why a save made shortly before a swap is refused on a core without it.
 - Eight failed reads within ten minutes point at dirty heads or a failing disk, so that disk is
   left alone, no more reads or writes, until it's taken out and put back.
 - A drive stays read-only until it has been seen empty once, which proves it can report a swap.
   With the bridge on its own, name proven drives with `--proven AB`.
 - A write rebuilds a whole track, so a track holding more than plain sectors, usually copy
-  protection, can't be written. Backups count such tracks in the file name; an image can't hold them.
+  protection, can't be written. The D88 file shows it whole; a write that would change anything
+  but a plain sector's data, a sector's ID, the layout or the header, is refused.
 - A track that wouldn't read isn't tried again for 30 seconds and can't be written until the disk
   is changed. A backup stops after 8 unreadable tracks in a row.
 - Saves are written last track first, so an interrupted save can't leave a directory naming
