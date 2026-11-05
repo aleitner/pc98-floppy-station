@@ -591,8 +591,11 @@ def d88_tests() -> None:
         again = d88.Image.from_bytes(open(path, "rb").read())
         check(again.tracks[5][1].data[:8] == b"SAVEDATA" and len(open(path, "rb").read()) == len(raw),
               "a save lands in the file in place")
-        disk = TrackDisk(be)
+        logged: List[str] = []
+        disk = TrackDisk(be, log=logged.append)
         check([x.r for x in disk.sectors(2)] == [x.r for x in tracks[2]], "the disk layer serves all its sectors")
+        check(logged == ["track 1.0: copy protection, 11 extra sectors, served as on the disk"],
+              "extra sectors are reported calmly, as copy protection")
         try:
             disk.write_at(2 * 8192, b"z" * 8)
             check(False, "a write to the protected track is refused")

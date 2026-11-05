@@ -744,11 +744,18 @@ class TrackDisk:
                 extra = self.b.sectors(cyl, head)
                 if extra is not None:
                     self._extra[idx] = extra
-                    bad = [f"{x.r:02X}" for x in extra if x.status]
-                    if bad:
-                        self._log(f"track {cyl}.{head}: sector{'s' if len(bad) > 1 else ''} {', '.join(bad)} "
-                                  "read with a data error, as copy protection or a weak spot gives; "
-                                  "served that way, and the track can't be written")
+                    plain = set(d88.plain_ids(cyl, head, self.b.track_bytes, self.b.sector_n))
+                    odd = [x for x in extra if x.id not in plain]
+                    weak = [f"{x.r}" for x in extra if x.id in plain and x.status]
+                    if odd:
+                        self._log(f"track {cyl}.{head}: copy protection, {len(odd)} extra "
+                                  f"sector{'s' if len(odd) > 1 else ''}, served as on the disk")
+                    if weak:
+                        # A plain sector that won't read can be protection too, but also a weak spot
+                        # on the disk or dirty heads: worth knowing about.
+                        self._log(f"track {cyl}.{head}: sector{'s' if len(weak) > 1 else ''} {', '.join(weak)} "
+                                  "read with an error; served that way, and the track isn't written. If this "
+                                  "isn't copy protection, clean the heads and look the disk over")
             t = bytearray(data)
             self._cache[idx] = t
             if idx == 0:
